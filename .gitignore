@@ -35,3 +35,7 @@ local.properties
 captures/
 *.apk
 *.aab
+
+# The generic "*.jar" rule above also matches the Gradle wrapper jar — keep it tracked,
+# it must be committed for CI/other machines to run ./gradlew without a system Gradle install.
+!gradle/wrapper/gradle-wrapper.jar
