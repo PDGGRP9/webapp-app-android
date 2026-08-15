@@ -12,6 +12,12 @@ object BraceletMeasurementCodec {
 
     fun decode(identity: BraceletIdentity, payload: ByteArray): BiometricMeasurement {
         decodeJson(identity, payload)?.let { return it }
+        // firmware/ (branch core-firmware) always sends a fixed 4-byte struct: check this
+        // deterministically before the delimited-text heuristic, which could otherwise
+        // misfire if a raw byte happens to equal ',' / ';' / '|'.
+        if (payload.size == 4) {
+            return decodeCoreFirmwareBinary(identity, payload)
+        }
         decodeDelimitedText(identity, payload)?.let { return it }
         return decodeBinary(identity, payload)
     }
@@ -29,7 +35,7 @@ object BraceletMeasurementCodec {
                 serialNumber = json.optString("serial_number", identity.serialNumber),
                 deviceName = json.optString("device_name", identity.deviceName),
                 macAddress = json.optString("mac_address", identity.macAddress),
-                capturedAt = parseInstant(json.optString("captured_at", null)),
+                capturedAt = parseInstant(json.optString("captured_at", "")),
                 heartRateBpm = json.takeIf { it.has("heart_rate_bpm") && !it.isNull("heart_rate_bpm") }?.optInt("heart_rate_bpm"),
                 spo2Percent = json.takeIf { it.has("spo2_percent") && !it.isNull("spo2_percent") }?.optDouble("spo2_percent"),
                 stepCount = json.optLong("step_count", 0L),
@@ -68,6 +74,32 @@ object BraceletMeasurementCodec {
             stepCount = steps,
             motionLevel = motion,
             signalQuality = signal,
+            rawPayload = payload,
+        )
+    }
+
+    /**
+     * firmware/ (branch core-firmware) src/ble_manager.cpp BLEManager::sendSensorData:
+     * payload = [HR uint8][SpO2 uint8][Steps MSB][Steps LSB], steps as a big-endian uint16.
+     * The DFRobot MAX30102 (also used on the sibling iOS-firmware branch) reports 0 for
+     * "no reading" rather than a real 0 bpm/percent, so 0 is surfaced as null (shown as "—").
+     */
+    private fun decodeCoreFirmwareBinary(identity: BraceletIdentity, payload: ByteArray): BiometricMeasurement {
+        val heartRate = payload[0].toUByte().toInt()
+        val spo2 = payload[1].toUByte().toInt()
+        val steps = (payload[2].toUByte().toInt() shl 8) or payload[3].toUByte().toInt()
+
+        return BiometricMeasurement(
+            deviceUid = identity.deviceUid,
+            serialNumber = identity.serialNumber,
+            deviceName = identity.deviceName,
+            macAddress = identity.macAddress,
+            capturedAt = Instant.now(),
+            heartRateBpm = heartRate.takeIf { it > 0 },
+            spo2Percent = spo2.takeIf { it > 0 }?.toDouble(),
+            stepCount = steps.toLong(),
+            motionLevel = null,
+            signalQuality = null,
             rawPayload = payload,
         )
     }
