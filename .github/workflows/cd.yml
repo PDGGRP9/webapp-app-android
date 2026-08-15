@@ -73,17 +73,10 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: |
-            adb install -r app/build/outputs/apk/debug/app-debug.apk
-            adb logcat -c
-            adb shell am start -n com.pdg.braceletconnecte/.MainActivity
-            sleep 8
-            if adb logcat -d | grep -q "FATAL EXCEPTION.*com.pdg.braceletconnecte"; then
-              echo "App crashed on launch:"
-              adb logcat -d | grep -A 30 "FATAL EXCEPTION.*com.pdg.braceletconnecte"
-              exit 1
-            fi
-            echo "App launched without crashing."
+          # android-emulator-runner runs each line of a multi-line `script:` as its own
+          # separate `sh -c` call, not as one cohesive script — an inline if/then/fi here
+          # gets split apart and fails with a syntax error. A real script file sidesteps that.
+          script: bash .github/scripts/smoke-test.sh
 
   publish:
     needs: smoke-test
