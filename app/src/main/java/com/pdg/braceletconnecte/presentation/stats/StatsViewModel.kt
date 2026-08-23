@@ -29,9 +29,15 @@ enum class StatsRange(val label: String, val hours: Long) {
     LAST_30D("30j", 24 * 30),
 }
 
+enum class ChartKind(val label: String) {
+    Line("Courbe"),
+    Bar("Barres"),
+}
+
 data class StatsUiState(
     val metric: StatsMetric = StatsMetric.HEART_RATE,
     val range: StatsRange = StatsRange.LAST_24H,
+    val chartKind: ChartKind = ChartKind.Line,
     val measurements: List<MeasurementDto> = emptyList(),
     val showRawTable: Boolean = false,
     val isLoading: Boolean = false,
@@ -58,6 +64,7 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectMetric(metric: StatsMetric) = _uiState.update { it.copy(metric = metric) }
     fun selectRange(range: StatsRange) = _uiState.update { it.copy(range = range) }
+    fun selectChartKind(chartKind: ChartKind) = _uiState.update { it.copy(chartKind = chartKind) }
     fun toggleRawTable() = _uiState.update { it.copy(showRawTable = !it.showRawTable) }
 
     private fun refresh() {

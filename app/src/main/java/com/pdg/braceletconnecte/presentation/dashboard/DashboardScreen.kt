@@ -5,56 +5,66 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ExitToApp
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavController
 import com.pdg.braceletconnecte.data.api.dto.capturedAtInstant
 import com.pdg.braceletconnecte.domain.BiometricMeasurement
 import com.pdg.braceletconnecte.domain.ConnectionState
 import com.pdg.braceletconnecte.presentation.PermissionScreen
+import com.pdg.braceletconnecte.presentation.components.AppButton
+import com.pdg.braceletconnecte.presentation.components.AppButtonVariant
+import com.pdg.braceletconnecte.presentation.components.AppCard
+import com.pdg.braceletconnecte.presentation.components.AppCardVariant
+import com.pdg.braceletconnecte.presentation.components.AppScaffold
+import com.pdg.braceletconnecte.presentation.components.Avatar
 import com.pdg.braceletconnecte.presentation.components.DataTable
-import com.pdg.braceletconnecte.presentation.components.MetricCard
+import com.pdg.braceletconnecte.presentation.components.DevicePill
+import com.pdg.braceletconnecte.presentation.components.MetricTile
+import com.pdg.braceletconnecte.presentation.components.PulseWaveCanvas
+import com.pdg.braceletconnecte.presentation.components.StatRow
+import com.pdg.braceletconnecte.presentation.components.StatRowItem
+import com.pdg.braceletconnecte.presentation.components.clampSp
+import com.pdg.braceletconnecte.presentation.components.formatNumber
 import com.pdg.braceletconnecte.presentation.components.formatShortTime
-import java.text.NumberFormat
+import com.pdg.braceletconnecte.presentation.components.headerDate
+import com.pdg.braceletconnecte.presentation.components.initials
+import com.pdg.braceletconnecte.presentation.components.timeAgo
+import com.pdg.braceletconnecte.presentation.navigation.AppRoutes
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
-    onNavigateToStats: () -> Unit,
+    navController: NavController,
     viewModel: DashboardViewModel = viewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -67,54 +77,140 @@ fun DashboardScreen(
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("BraceCo") },
-                actions = {
-                    TextButton(onClick = onNavigateToStats) { Text("Stats") }
-                    IconButton(onClick = viewModel::refreshBackendData) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Actualiser")
-                    }
-                    IconButton(onClick = viewModel::logout) {
-                        Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "Déconnexion")
-                    }
-                },
-            )
-        },
-    ) { paddingValues ->
+    val live = uiState.latestBleMeasurement
+    val last = uiState.lastMeasurement
+    val heartRate = live?.heartRateBpm ?: last?.heartRateBpm
+    val spo2 = live?.spo2Percent ?: last?.spo2Percent
+    val stepCount = live?.stepCount ?: last?.stepCount
+    val signalQuality = live?.signalQuality ?: last?.signalQuality
+    val lastCapturedAt = live?.capturedAt ?: last?.capturedAtInstant()
+    val braceletLabel = uiState.bracelets.firstOrNull()?.displayName
+        ?: uiState.bracelets.firstOrNull()?.serialNumber
+        ?: "Aucun bracelet"
+
+    AppScaffold(navController = navController) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(paddingValues)
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(padding)
+                .padding(horizontal = 18.4.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(17.6.dp),
         ) {
-            Text(
-                "Bonjour ${uiState.userDisplayName.ifBlank { "" }}".trim(),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text(
+                        "Salut, ${uiState.userDisplayName.ifBlank { "toi" }}",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    Text(
+                        headerDate(),
+                        fontSize = 12.8.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.2.dp),
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    DevicePill(label = braceletLabel, isActive = uiState.isPaired && uiState.connectionState != ConnectionState.Error)
+                    Avatar(
+                        label = initials(uiState.userDisplayName),
+                        size = 34.dp,
+                        modifier = Modifier
+                            .padding(start = 8.8.dp)
+                            .clickable { navController.navigate(AppRoutes.ACCOUNT) },
+                    )
+                }
+            }
 
-            MetricsRow(uiState)
+            BpmHero(heartRateBpm = heartRate, capturedAt = lastCapturedAt)
 
-            BleSection(
+            AppCard(title = "Signal en direct") {
+                PulseWaveCanvas(
+                    showGridLines = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(96.dp),
+                )
+                val heartValues = uiState.statistics
+                StatRow(
+                    items = listOf(
+                        StatRowItem(formatNumber(heartValues?.minHeartRateBpm?.toDouble()), "Min"),
+                        StatRowItem(formatNumber(heartValues?.avgHeartRateBpm), "Moy"),
+                        StatRowItem(formatNumber(heartValues?.maxHeartRateBpm?.toDouble()), "Max"),
+                    ),
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(9.6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(11.2.dp)) {
+                    MetricTile(
+                        icon = "🩸",
+                        name = "SpO2",
+                        value = formatNumber(spo2, " %"),
+                        isLive = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    MetricTile(
+                        icon = "👣",
+                        name = "Pas cumulés",
+                        value = formatNumber(stepCount?.toDouble()),
+                        isLive = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(11.2.dp)) {
+                    MetricTile(
+                        icon = "📶",
+                        name = "Qualité signal",
+                        value = formatNumber(signalQuality?.toDouble(), " %"),
+                        isLive = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    MetricTile(
+                        icon = "🧘",
+                        name = "Variabilité (HRV)",
+                        value = "-",
+                        badgeText = "Bientôt",
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            BleCard(
                 uiState = uiState,
                 hasPermissions = hasBlePermissions,
                 onRequestPermissions = { launcher.launch(permissions.toTypedArray()) },
                 onStart = viewModel::startBleStreaming,
                 onStop = viewModel::stopBleStreaming,
+                onRefresh = viewModel::refreshBackendData,
             )
 
-            StatisticsCard(uiState)
-
-            RecentMeasurementsCard(uiState)
-
-            LogCard(uiState.logLines)
+            if (uiState.recentMeasurements.isNotEmpty()) {
+                AppCard(title = "Dernières mesures") {
+                    DataTable(
+                        headers = listOf("Heure", "BPM", "SpO2", "Pas"),
+                        rows = uiState.recentMeasurements.take(10).map { measurement ->
+                            listOf(
+                                formatShortTime(measurement.capturedAtInstant()),
+                                measurement.heartRateBpm?.toString() ?: "-",
+                                formatNumber(measurement.spo2Percent, " %"),
+                                measurement.stepCount.toString(),
+                            )
+                        },
+                    )
+                }
+            }
 
             uiState.lastError?.let { error ->
-                ErrorCard(message = error)
+                AppCard(variant = AppCardVariant.Card2) {
+                    Text("Erreur", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                    Text(error, color = MaterialTheme.colorScheme.error, fontSize = 12.8.sp)
+                }
             }
         }
     }
@@ -130,144 +226,114 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun MetricsRow(uiState: DashboardUiState) {
-    val live = uiState.latestBleMeasurement
-    val last = uiState.lastMeasurement
-
-    val heartRate = live?.heartRateBpm?.toString() ?: last?.heartRateBpm?.toString() ?: "—"
-    val spo2 = live?.spo2Percent?.let(::formatDecimal) ?: last?.spo2Percent?.let(::formatDecimal) ?: "—"
-    val steps = live?.stepCount?.toString() ?: last?.stepCount?.toString() ?: "—"
-    val signal = live?.signalQuality?.toString() ?: last?.signalQuality?.toString() ?: "—"
-
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        MetricCard(label = "BPM", value = heartRate, modifier = Modifier.weight(1f))
-        MetricCard(label = "SpO2", value = spo2, modifier = Modifier.weight(1f))
-        MetricCard(label = "Pas", value = steps, modifier = Modifier.weight(1f))
-        MetricCard(label = "Signal", value = signal, modifier = Modifier.weight(1f))
+private fun BpmHero(heartRateBpm: Int?, capturedAt: java.time.Instant?) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "FRÉQUENCE CARDIAQUE",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.5.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 4.dp)) {
+            val scale by rememberInfiniteBeat()
+            Text("❤️", fontSize = 20.sp, modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale })
+            Text(
+                text = formatNumber(heartRateBpm?.toDouble()),
+                fontSize = clampSp(4.6f, 0.26f, 6.2f),
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(start = 2.8.dp),
+            )
+            Text(
+                "bpm",
+                fontSize = 16.8.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 2.8.dp, bottom = 6.dp),
+            )
+        }
+        Text(
+            text = if (capturedAt != null) {
+                buildAnnotatedString {
+                    append("Dernière mesure ")
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)) {
+                        append(timeAgo(capturedAt))
+                    }
+                }
+            } else {
+                buildAnnotatedString { append("En attente d'une première mesure") }
+            },
+            fontSize = 12.8.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.4.dp),
+        )
     }
 }
 
 @Composable
-private fun BleSection(
+private fun rememberInfiniteBeat() = androidx.compose.animation.core.rememberInfiniteTransition(label = "beat")
+    .animateFloat(
+        initialValue = 1f,
+        targetValue = 1.3f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            androidx.compose.animation.core.tween(485, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+            androidx.compose.animation.core.RepeatMode.Reverse,
+        ),
+        label = "beat-scale",
+    )
+
+@Composable
+private fun BleCard(
     uiState: DashboardUiState,
     hasPermissions: Boolean,
     onRequestPermissions: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onRefresh: () -> Unit,
 ) {
     if (!hasPermissions) {
-        PermissionScreen(
-            permissions = blePermissions(),
-            onGrant = onRequestPermissions,
-        )
+        PermissionScreen(permissions = blePermissions(), onGrant = onRequestPermissions)
         return
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-    ) {
-        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AssistChip(onClick = {}, label = { Text(uiState.connectionState.label) })
-                if (uiState.isPaired) {
-                    AssistChip(onClick = {}, label = { Text(uiState.bracelets.first().displayName ?: "Bracelet associé") })
-                }
-            }
-            Text(
-                "Connexion au bracelet ESP32 et retransmission en direct vers le backend.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onStart, enabled = !uiState.isBleRunning) { Text("Démarrer") }
-                OutlinedButton(onClick = onStop, enabled = uiState.isBleRunning) { Text("Arrêter") }
-            }
+    AppCard(title = "Bracelet ESP32") {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DevicePill(label = uiState.connectionState.label, isActive = uiState.isBleRunning)
         }
-    }
-}
-
-@Composable
-private fun StatisticsCard(uiState: DashboardUiState) {
-    val statistics = uiState.statistics
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-    ) {
-        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Statistiques globales", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            if (statistics == null) {
-                Text(
-                    "En attente de données…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    MetricCard(label = "Mesures", value = statistics.measurementsCount.toString(), modifier = Modifier.weight(1f))
-                    MetricCard(label = "BPM moyen", value = statistics.avgHeartRateBpm?.let(::formatDecimal) ?: "—", modifier = Modifier.weight(1f))
-                    MetricCard(label = "SpO2 moyen", value = statistics.avgSpo2Percent?.let(::formatDecimal) ?: "—", modifier = Modifier.weight(1f))
-                    MetricCard(label = "Max pas", value = statistics.maxStepCount.toString(), modifier = Modifier.weight(1f))
+        Text(
+            "Connexion au bracelet ESP32 et retransmission en direct vers le backend.",
+            fontSize = 12.8.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(9.6.dp)) {
+            AppButton(
+                text = "Démarrer",
+                onClick = onStart,
+                enabled = !uiState.isBleRunning,
+                modifier = Modifier.weight(1f),
+            )
+            AppButton(
+                text = "Arrêter",
+                onClick = onStop,
+                variant = AppButtonVariant.Ghost,
+                enabled = uiState.isBleRunning,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (uiState.logLines.isNotEmpty()) {
+            AppCard(variant = AppCardVariant.Card2, modifier = Modifier.heightIn(max = 140.dp)) {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    uiState.logLines.forEach { line ->
+                        Text(line, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun RecentMeasurementsCard(uiState: DashboardUiState) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-    ) {
-        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Dernières mesures", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            DataTable(
-                headers = listOf("Heure", "BPM", "SpO2", "Pas"),
-                rows = uiState.recentMeasurements.take(10).map { measurement ->
-                    listOf(
-                        formatShortTime(measurement.capturedAtInstant()),
-                        measurement.heartRateBpm?.toString() ?: "—",
-                        measurement.spo2Percent?.let(::formatDecimal) ?: "—",
-                        measurement.stepCount.toString(),
-                    )
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun LogCard(lines: List<String>) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-    ) {
-        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Journal", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            HorizontalDivider()
-            lines.forEach { line ->
-                Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ErrorCard(message: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-    ) {
-        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Erreur", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onErrorContainer)
-            Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer)
-        }
+        TextButton(onClick = onRefresh) { Text("Actualiser les données") }
     }
 }
 
@@ -280,6 +346,7 @@ private fun PairingDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
         title = { Text("Associer ce bracelet ?") },
         text = {
             Text(
@@ -288,10 +355,10 @@ private fun PairingDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onConfirm, enabled = !isPairing) { Text("Associer") }
+            AppButton(text = "Associer", onClick = onConfirm, enabled = !isPairing, isLoading = isPairing)
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isPairing) { Text("Plus tard") }
+            AppButton(text = "Plus tard", onClick = onDismiss, variant = AppButtonVariant.Ghost, enabled = !isPairing)
         },
     )
 }
@@ -314,7 +381,3 @@ private val ConnectionState.label: String
         ConnectionState.Stopped -> "Arrêté"
         ConnectionState.Error -> "Erreur"
     }
-
-private fun formatDecimal(value: Double): String {
-    return NumberFormat.getNumberInstance().apply { maximumFractionDigits = 1 }.format(value)
-}

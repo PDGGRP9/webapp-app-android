@@ -17,7 +17,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.pdg.braceletconnecte.BraceletConnecteApplication
 import com.pdg.braceletconnecte.data.auth.AuthState
+import com.pdg.braceletconnecte.presentation.account.AccountScreen
 import com.pdg.braceletconnecte.presentation.dashboard.DashboardScreen
+import com.pdg.braceletconnecte.presentation.forgotpassword.ForgotPasswordScreen
 import com.pdg.braceletconnecte.presentation.login.LoginScreen
 import com.pdg.braceletconnecte.presentation.register.RegisterScreen
 import com.pdg.braceletconnecte.presentation.stats.StatsScreen
@@ -25,8 +27,10 @@ import com.pdg.braceletconnecte.presentation.stats.StatsScreen
 object AppRoutes {
     const val LOGIN = "login"
     const val REGISTER = "register"
+    const val FORGOT_PASSWORD = "forgot_password"
     const val DASHBOARD = "dashboard"
     const val STATS = "stats"
+    const val ACCOUNT = "account"
 }
 
 @Composable
@@ -45,6 +49,7 @@ fun AppNavHost(application: BraceletConnecteApplication) {
         composable(AppRoutes.LOGIN) {
             LoginScreen(
                 onNavigateToRegister = { navController.navigate(AppRoutes.REGISTER) },
+                onNavigateToForgotPassword = { navController.navigate(AppRoutes.FORGOT_PASSWORD) },
                 onLoggedIn = {
                     navController.navigate(AppRoutes.DASHBOARD) {
                         popUpTo(AppRoutes.LOGIN) { inclusive = true }
@@ -62,18 +67,28 @@ fun AppNavHost(application: BraceletConnecteApplication) {
                 },
             )
         }
+        composable(AppRoutes.FORGOT_PASSWORD) {
+            ForgotPasswordScreen(onNavigateToLogin = { navController.popBackStack() })
+        }
         composable(AppRoutes.DASHBOARD) {
-            DashboardScreen(onNavigateToStats = { navController.navigate(AppRoutes.STATS) })
+            DashboardScreen(navController = navController)
         }
         composable(AppRoutes.STATS) {
-            StatsScreen(onNavigateBack = { navController.popBackStack() })
+            StatsScreen(navController = navController)
+        }
+        composable(AppRoutes.ACCOUNT) {
+            AccountScreen(navController = navController)
         }
     }
 
     // A 401 anywhere clears the session; react by bouncing back to Login from any screen.
     LaunchedEffect(authState) {
         val currentRoute = navController.currentDestination?.route
-        if (authState is AuthState.LoggedOut && currentRoute != AppRoutes.LOGIN && currentRoute != AppRoutes.REGISTER) {
+        if (authState is AuthState.LoggedOut &&
+            currentRoute != AppRoutes.LOGIN &&
+            currentRoute != AppRoutes.REGISTER &&
+            currentRoute != AppRoutes.FORGOT_PASSWORD
+        ) {
             navController.navigate(AppRoutes.LOGIN) {
                 popUpTo(0) { inclusive = true }
             }

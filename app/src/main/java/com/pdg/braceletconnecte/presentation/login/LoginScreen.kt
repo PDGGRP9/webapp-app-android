@@ -1,114 +1,159 @@
 package com.pdg.braceletconnecte.presentation.login
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.pdg.braceletconnecte.presentation.components.AppButton
+import com.pdg.braceletconnecte.presentation.components.AppButtonVariant
+import com.pdg.braceletconnecte.presentation.components.AppTextField
+import com.pdg.braceletconnecte.presentation.components.Pill
+import com.pdg.braceletconnecte.presentation.components.PulseWaveCanvas
+import com.pdg.braceletconnecte.presentation.components.clampSp
+import com.pdg.braceletconnecte.ui.theme.AppColors
 
 @Composable
 fun LoginScreen(
     onNavigateToRegister: () -> Unit,
+    onNavigateToForgotPassword: () -> Unit,
     onLoggedIn: () -> Unit,
     viewModel: LoginViewModel = viewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    Scaffold { paddingValues ->
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(AppColors.Lime)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 18.4.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(17.6.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Pill(text = "Projet PDG · GRP9", borderColor = AppColors.Ink, contentColor = AppColors.InkSoft)
+            Pill(text = "Open source", borderColor = AppColors.Ink, contentColor = AppColors.InkSoft)
+        }
+
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(paddingValues)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                "BraceCo",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.SemiBold,
+                text = "BraceCo",
+                color = AppColors.Ink,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = clampSp(1.9f, 0.09f, 2.5f),
+                textAlign = TextAlign.Center,
             )
             Text(
-                "Console santé temps réel",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = "Open source. Sans abonnement. Sans espion.",
+                color = AppColors.Ink,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.4.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            PulseWaveCanvas(
+                lineColor = AppColors.Ink,
+                showGridLines = false,
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .fillMaxWidth(0.8f)
+                    .height(36.dp),
+            )
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(11.2.dp)) {
+            AppTextField(
+                label = "Email",
+                value = uiState.email,
+                onValueChange = viewModel::onEmailChange,
+                placeholder = "prenom.nom@exemple.ch",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+            )
+            AppTextField(
+                label = "Mot de passe",
+                value = uiState.password,
+                onValueChange = viewModel::onPasswordChange,
+                placeholder = "••••••••••",
+                isPassword = true,
+            )
+            AppTextField(
+                label = "URL du backend",
+                value = uiState.baseUrl,
+                onValueChange = viewModel::onBaseUrlChange,
+                placeholder = "http://10.0.2.2:8000",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             )
 
-            Card(
+            uiState.errorMessage?.let { error ->
+                Text(error, color = AppColors.Danger, fontSize = 12.8.sp, fontWeight = FontWeight.SemiBold)
+            }
+
+            AppButton(
+                text = "Se connecter",
+                onClick = { viewModel.submit(onLoggedIn) },
+                variant = AppButtonVariant.Ink,
+                isLoading = uiState.isSubmitting,
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    OutlinedTextField(
-                        value = uiState.email,
-                        onValueChange = viewModel::onEmailChange,
-                        label = { Text("Email") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = uiState.password,
-                        onValueChange = viewModel::onPasswordChange,
-                        label = { Text("Mot de passe") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = uiState.baseUrl,
-                        onValueChange = viewModel::onBaseUrlChange,
-                        label = { Text("URL du backend") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-
-                    uiState.errorMessage?.let { error ->
-                        Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    }
-
-                    Button(
-                        onClick = { viewModel.submit(onLoggedIn) },
-                        enabled = !uiState.isSubmitting,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        if (uiState.isSubmitting) {
-                            CircularProgressIndicator(modifier = Modifier.padding(2.dp), strokeWidth = 2.dp)
-                        } else {
-                            Text("Se connecter")
-                        }
-                    }
-
-                    TextButton(onClick = onNavigateToRegister, modifier = Modifier.fillMaxWidth()) {
-                        Text("Créer un compte")
-                    }
+                TextButton(onClick = onNavigateToForgotPassword) {
+                    Text("Mot de passe oublié ?", color = AppColors.InkSoft, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                }
+                TextButton(onClick = onNavigateToRegister) {
+                    Text("Créer un compte", color = AppColors.InkSoft, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
+
+        Text(
+            text = "TES DONNÉES T'APPARTIENNENT",
+            color = AppColors.InkSoft,
+            fontSize = 11.2.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.5.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .drawBehind {
+                    drawLine(
+                        color = AppColors.InkSoft.copy(alpha = 0.4f),
+                        start = Offset(0f, 0f),
+                        end = Offset(size.width, 0f),
+                        strokeWidth = 1.5.dp.toPx(),
+                    )
+                }
+                .padding(top = 12.8.dp),
+        )
     }
 }

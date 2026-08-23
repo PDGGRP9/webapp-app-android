@@ -42,7 +42,8 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     init {
         val user = (authRepository.authState.value as? AuthState.LoggedIn)?.user
-        _uiState.update { it.copy(userDisplayName = user?.username.orEmpty()) }
+        val displayName = user?.firstName?.takeIf { it.isNotBlank() } ?: user?.username.orEmpty()
+        _uiState.update { it.copy(userDisplayName = displayName) }
         startPolling()
     }
 
