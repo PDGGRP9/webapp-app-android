@@ -70,7 +70,7 @@ fun DashboardScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Bracelet Connecté") },
+                title = { Text("BraceCo") },
                 actions = {
                     TextButton(onClick = onNavigateToStats) { Text("Stats") }
                     IconButton(onClick = viewModel::refreshBackendData) {

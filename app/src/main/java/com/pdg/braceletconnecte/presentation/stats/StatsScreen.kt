@@ -112,7 +112,10 @@ fun StatsScreen(
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    LineChartCanvas(points = chartPoints)
+                    LineChartCanvas(
+                        points = chartPoints,
+                        minDomain = if (uiState.metric == StatsMetric.STEPS) 0f else null,
+                    )
 
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         MetricCard(label = "Moyenne", value = values.average().let(::formatOrDash), modifier = Modifier.weight(1f))

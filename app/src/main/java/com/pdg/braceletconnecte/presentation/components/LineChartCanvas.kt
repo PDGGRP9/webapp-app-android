@@ -22,6 +22,8 @@ fun LineChartCanvas(
     points: List<Pair<Instant, Float>>,
     modifier: Modifier = Modifier,
     lineColor: Color = MaterialTheme.colorScheme.primary,
+    /** Pin the y-axis floor instead of auto-fitting to the lowest value (e.g. 0 for a step count). */
+    minDomain: Float? = null,
 ) {
     if (points.size < 2) {
         Box(
@@ -40,7 +42,7 @@ fun LineChartCanvas(
     val sorted = points.sortedBy { it.first }
     val minX = sorted.first().first.epochSecond.toFloat()
     val maxX = sorted.last().first.epochSecond.toFloat()
-    val minY = sorted.minOf { it.second }
+    val minY = minDomain ?: sorted.minOf { it.second }
     val maxY = sorted.maxOf { it.second }
     val xRange = (maxX - minX).takeIf { it > 0f } ?: 1f
     val yRange = (maxY - minY).takeIf { it > 0f } ?: 1f

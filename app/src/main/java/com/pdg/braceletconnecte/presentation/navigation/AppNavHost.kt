@@ -89,6 +89,6 @@ private fun SplashScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         CircularProgressIndicator()
-        Text("Bracelet Connecté", style = MaterialTheme.typography.titleMedium)
+        Text("BraceCo", style = MaterialTheme.typography.titleMedium)
     }
 }
