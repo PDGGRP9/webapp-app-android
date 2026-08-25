@@ -19,12 +19,19 @@ data class DashboardUiState(
     val pairingPromptDismissed: Boolean = false,
     val isPairing: Boolean = false,
     val isRefreshing: Boolean = false,
+    /** Measurements in the local database not yet accepted by the backend. */
+    val localPending: Int = 0,
+    /** The user pressed "Stop": don't restart on our own. */
+    val stoppedByUser: Boolean = false,
 ) {
     val isBleRunning: Boolean
         get() = connectionState == ConnectionState.Scanning ||
             connectionState == ConnectionState.Connecting ||
             connectionState == ConnectionState.Connected ||
-            connectionState == ConnectionState.Publishing
+            connectionState == ConnectionState.Publishing ||
+            connectionState == ConnectionState.Syncing ||
+            connectionState == ConnectionState.Live ||
+            connectionState == ConnectionState.Reconnecting
 
     val isPaired: Boolean
         get() = bracelets.isNotEmpty()

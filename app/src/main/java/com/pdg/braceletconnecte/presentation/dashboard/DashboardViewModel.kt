@@ -29,9 +29,20 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     private val authRepository = app.authRepository
     private val braceletRepository = app.braceletRepository
     private val measurementsRepository = app.measurementsRepository
+    private val measurementStore = app.measurementStore
 
     private val appConfig = AppConfig.default()
-    private val bleClient = BraceletBleClient(application, appConfig.bracelet)
+
+    // The BLE client writes straight to the database and only acknowledges
+    // afterwards: that is the invariant of the protocol (nothing is flushed on
+    // the bracelet before the ACK). Sending to the backend is the
+    // MeasurementUploader's job, not BLE's.
+    private val bleClient = BraceletBleClient(application, appConfig.bracelet) { measurements ->
+        // Write first (that write is what allows the ACK on the BLE side), then
+        // wake the uploader: both live data and catch-up go out to the backend
+        // right away, without waiting for its 5 s tick.
+        measurementStore.save(measurements).also { app.uploader.nudge() }
+    }
     private val timestampFormatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault())
 
     private val _uiState = MutableStateFlow(DashboardUiState())
@@ -45,6 +56,24 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         val displayName = user?.firstName?.takeIf { it.isNotBlank() } ?: user?.username.orEmpty()
         _uiState.update { it.copy(userDisplayName = displayName) }
         startPolling()
+        observeLocalQueue()
+        observeUploadLog()
+    }
+
+    /** [Upload] lines join the on-screen log, next to the [SYNC] ones. */
+    private fun observeUploadLog() {
+        viewModelScope.launch {
+            app.uploader.log.collect { line -> appendLog(line) }
+        }
+    }
+
+    /** Measurements in the database the backend has not accepted yet. */
+    private fun observeLocalQueue() {
+        viewModelScope.launch {
+            measurementStore.pendingCount().collect { count ->
+                _uiState.update { it.copy(localPending = count) }
+            }
+        }
     }
 
     private fun currentUserId(): Long? = (authRepository.authState.value as? AuthState.LoggedIn)?.user?.id
@@ -81,11 +110,22 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /**
+     * Starts the BLE session if it is not already running and the user has not
+     * stopped it by hand. Called when the dashboard opens: the sync must start
+     * as soon as it is possible, without a click.
+     */
+    fun startBleStreamingIfIdle() {
+        if (bleSessionJob?.isActive == true || _uiState.value.stoppedByUser) return
+        startBleStreaming()
+    }
+
     fun startBleStreaming() {
         if (bleSessionJob?.isActive == true) return
 
         _uiState.update {
             it.copy(
+                stoppedByUser = false,
                 connectionState = ConnectionState.Scanning,
                 lastError = null,
                 logLines = prependLog(it.logLines, "Démarrage du flux BLE"),
@@ -121,6 +161,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         bleSessionJob = null
         _uiState.update { current ->
             current.copy(
+                stoppedByUser = true,
                 connectionState = ConnectionState.Stopped,
                 logLines = prependLog(current.logLines, "Flux BLE arrêté"),
             )
@@ -140,32 +181,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                     current.pendingPairingCandidate
                 },
             )
-        }
-        retransmitMeasurement(measurement)
-    }
-
-    private fun retransmitMeasurement(measurement: BiometricMeasurement) {
-        _uiState.update { it.copy(connectionState = ConnectionState.Publishing) }
-        viewModelScope.launch {
-            measurementsRepository.postMeasurement(measurement)
-                .onSuccess {
-                    _uiState.update { current ->
-                        current.copy(
-                            connectionState = ConnectionState.Connected,
-                            logLines = prependLog(current.logLines, "Mesure transmise au backend"),
-                        )
-                    }
-                }
-                .onFailure { throwable ->
-                    val message = authRepository.errorMessage(throwable)
-                    _uiState.update { current ->
-                        current.copy(
-                            connectionState = ConnectionState.Connected,
-                            lastError = message,
-                            logLines = prependLog(current.logLines, "Échec de transmission: $message"),
-                        )
-                    }
-                }
         }
     }
 
@@ -214,9 +229,14 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { current -> current.copy(logLines = prependLog(current.logLines, message)) }
     }
 
+    /** Full log, to paste into a ticket ("Copy" button). */
+    fun logsAsText(): String = _uiState.value.logLines.asReversed().joinToString("\n")
+
     private fun prependLog(logLines: List<String>, message: String): List<String> {
         val line = "${timestampFormatter.format(Instant.now())}  $message"
-        return (listOf(line) + logLines).take(8)
+        // 200 lines: enough to cover a full sync and its resume after a drop,
+        // which is exactly what we want to be able to read back.
+        return (listOf(line) + logLines).take(MAX_LOG_LINES)
     }
 
     private fun formatTimestamp(instant: Instant): String = timestampFormatter.format(instant)
@@ -225,5 +245,9 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         super.onCleared()
         bleSessionJob?.cancel()
         pollJob?.cancel()
+    }
+
+    private companion object {
+        const val MAX_LOG_LINES = 200
     }
 }

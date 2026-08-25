@@ -15,16 +15,44 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import java.time.Instant
+import java.util.ArrayDeque
 import java.util.UUID
-import kotlin.math.min
 
+/**
+ * The BLE link to the bracelet, from scanning to the real-time stream.
+ *
+ * Flow of a session (see the sequence diagram in the firmware README):
+ *   1. scan -> connect -> service discovery
+ *   2. subscribe to DATA (live) and HISTORY notifications
+ *   3. write the time (TIME) then START on SYNC_CTRL
+ *   4. for every history packet: store it locally, THEN ACK
+ *   5. "stock empty" packet -> switch to live
+ *
+ * Two points carry the whole robustness:
+ *  - **We only acknowledge after the local write.** As long as the ACK has not
+ *    been sent, the bracelet keeps its measurements: a drop loses nothing.
+ *  - **A disconnection no longer ends the flow**: we retry, then go back to
+ *    scanning. This is the "Reconnection" loop of the README, which absorbs
+ *    every cause of a drop without handling them separately.
+ *
+ * @param onMeasurements stores the measurements and returns how many were
+ *   actually new (duplicates are silently ignored).
+ */
 class BraceletBleClient(
     private val context: Context,
     private val config: BraceletBleConfig,
+    private val onMeasurements: suspend (List<BiometricMeasurement>) -> Int = { it.size },
 ) {
 
     @SuppressLint("MissingPermission")
@@ -57,28 +85,200 @@ class BraceletBleClient(
             }
 
         var currentGatt: BluetoothGatt? = null
+        var currentDevice: BluetoothDevice? = null
+        var braceletIdentity: BraceletIdentity? = null
+        var attempt = 0
+        var closing = false
+        // Assigned further down: Kotlin does not allow calling a local function
+        // declared later, and reconnection needs both.
+        var restartScan: () -> Unit = {}
+        var reconnect: (BluetoothDevice) -> Unit = {}
+
+        // Counters for the status line: "the app received 60 measurements and
+        // ignored 2 because it already knew them".
+        var received = 0
+        var deduped = 0
+        var packets = 0
+
+        // Every GATT operation carries a label: it is what shows up in the status
+        // line, so we always know what we are waiting for.
+        val ops = ArrayDeque<Pair<String, () -> Unit>>()
+        var opRunning: String? = null
+        var opStartedAt = 0L
+        val gattHandler = Handler(Looper.getMainLooper())
+
+        fun logI(tag: String, message: String) = trySend(BraceletEvent.Log(BleLog.i(tag, message)))
+        fun logW(tag: String, message: String) = trySend(BraceletEvent.Log(BleLog.w(tag, message)))
+
+        /** Counterpart of the firmware's [STATE]: to paste into a ticket. */
+        fun logState(state: ConnectionState) {
+            BleLog.i(
+                "STATE",
+                "state=$state conn=${if (currentGatt != null) 1 else 0} essai=$attempt " +
+                    "attend=${opRunning ?: "-"} paquets=$packets recu=$received dedup=$deduped",
+            )
+        }
 
         fun emitState(state: ConnectionState) {
             trySend(BraceletEvent.StateChanged(state))
+            logState(state)
+        }
+
+        // --- GATT operation queue ---------------------------------------------
+        // Android only accepts one GATT operation at a time: launching two
+        // silently drops the second. We serialize them, and each completion
+        // callback triggers the next one.
+        fun runNextLocked() {
+            val op = ops.pollFirst() ?: return
+            opRunning = op.first
+            opStartedAt = System.currentTimeMillis()
+            // A GATT operation must never be started from Android's callback
+            // thread: the stack accepts it, sometimes runs it, but no longer
+            // reports the answer back — and everything after that is swallowed.
+            // So we go through the main thread, with a short delay to let the
+            // previous one finish on the stack side.
+            gattHandler.postDelayed({ op.second() }, OP_DISPATCH_DELAY_MS)
+        }
+
+        fun enqueue(label: String, op: () -> Unit) {
+            synchronized(ops) {
+                ops.addLast(label to op)
+                if (opRunning == null) runNextLocked()
+            }
+        }
+
+        fun opDone() {
+            synchronized(ops) {
+                opRunning = null
+                runNextLocked()
+            }
+        }
+
+        fun clearOps() {
+            synchronized(ops) {
+                ops.clear()
+                opRunning = null
+            }
+            gattHandler.removeCallbacksAndMessages(null)
+        }
+
+        // Watchdog: Android sometimes loses a GATT callback. Without this, a
+        // single missing answer silently freezes the whole protocol.
+        launch {
+            while (isActive) {
+                delay(1_000)
+                val stuck = synchronized(ops) {
+                    val label = opRunning
+                    if (label != null && System.currentTimeMillis() - opStartedAt > OP_TIMEOUT_MS) label else null
+                }
+                if (stuck != null) {
+                    logW("BLE", "pas de réponse GATT pour « $stuck » depuis ${OP_TIMEOUT_MS}ms -> on débloque la file")
+                    opDone()
+                }
+            }
+        }
+
+        /**
+         * true if the write actually started. Otherwise no `onCharacteristicWrite`
+         * will arrive and the caller must release the queue itself — which is
+         * exactly what used to block the whole protocol.
+         */
+        fun writeTo(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray): Boolean {
+            val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // 0 = BluetoothStatusCodes.SUCCESS (API 33)
+                gatt.writeCharacteristic(characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == 0
+            } else {
+                @Suppress("DEPRECATION")
+                characteristic.value = value
+                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                @Suppress("DEPRECATION")
+                gatt.writeCharacteristic(characteristic)
+            }
+            if (!started) {
+                logW("BLE", "écriture sur ${characteristic.uuid} refusée par la pile Android")
+            }
+            return started
+        }
+
+        /**
+         * Link lost: we retry, then go back to scanning. The bracelet has flushed
+         * nothing — the sync will resume where it stopped and already known
+         * measurements will be deduplicated on insert.
+         */
+        fun handleLostLink(status: Int) {
+            clearOps()
+            currentGatt?.close()
+            currentGatt = null
+            if (closing) return
+
+            attempt++
+            if (attempt <= config.reconnectAttempts) {
+                emitState(ConnectionState.Reconnecting)
+                logW("BLE", "lien perdu (status=$status) -> tentative $attempt/${config.reconnectAttempts} dans ${config.reconnectDelayMs}ms")
+                launch {
+                    delay(config.reconnectDelayMs)
+                    val device = currentDevice
+                    if (!closing && device != null) reconnect(device)
+                }
+            } else {
+                logW("BLE", "${config.reconnectAttempts} tentatives échouées -> retour au scan")
+                attempt = 0
+                currentDevice = null
+                restartScan()
+            }
         }
 
         val gattCallback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
+                        if (status != BluetoothGatt.GATT_SUCCESS) {
+                            // The infamous GATT 133 comes through here: without
+                            // this check we would stay stuck on a dead connection.
+                            logW("BLE", "connexion en erreur (status=$status)")
+                            handleLostLink(status)
+                            return
+                        }
+                        attempt = 0
                         emitState(ConnectionState.Connecting)
-                        trySend(BraceletEvent.Log("Services en cours de découverte..."))
-                        gatt.discoverServices()
+                        // The default MTU is 23 bytes, i.e. 20 usable: a history
+                        // packet (162 B) would be silently truncated. It is up to
+                        // the central to negotiate, the bracelet can only accept.
+                        // So we do it before anything else.
+                        gattHandler.post {
+                            if (!gatt.requestMtu(WANTED_MTU)) {
+                                logW("BLE", "négociation du MTU refusée -> découverte directe (paquets limités à 20 octets)")
+                                trySend(BraceletEvent.Log("Services en cours de découverte..."))
+                                gatt.discoverServices()
+                            }
+                        }
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         trySend(BraceletEvent.Log("Bracelet déconnecté."))
-                        emitState(ConnectionState.Stopped)
-                        close()
+                        // We no longer close the flow: we retry, then rescan.
+                        handleLostLink(status)
                     }
                 }
             }
 
+            override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                // mtu - 3 bytes of ATT header = what actually fits in a
+                // notification. A full packet needs 162.
+                val usable = mtu - 3
+                logI("BLE", "MTU négocié = $mtu octets ($usable utiles, il en faut 162 pour un paquet plein)")
+                gattHandler.post {
+                    trySend(BraceletEvent.Log("Services en cours de découverte..."))
+                    gatt.discoverServices()
+                }
+            }
+
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    logW("BLE", "découverte des services en échec (status=$status)")
+                    handleLostLink(status)
+                    return
+                }
+
                 val characteristic = findNotificationCharacteristic(gatt)
                 if (characteristic == null) {
                     trySend(BraceletEvent.Error("Aucune caractéristique de notification trouvée."))
@@ -87,14 +287,51 @@ class BraceletBleClient(
                     return
                 }
 
+                // The three catch-up characteristics. An older firmware does not
+                // have them: we then just listen to the live stream.
+                val service = gatt.getService(UUID.fromString(config.serviceUuid))
+                val history = service?.getCharacteristic(UUID.fromString(config.historyCharacteristicUuid))
+                val syncCtrl = service?.getCharacteristic(UUID.fromString(config.syncCtrlCharacteristicUuid))
+                val time = service?.getCharacteristic(UUID.fromString(config.timeCharacteristicUuid))
+
                 trySend(BraceletEvent.Log("Notifications activées sur ${characteristic.uuid}."))
-                enableNotifications(gatt, characteristic)
+                // We log the declared properties: a characteristic without the W
+                // bit is refused for writing by Android without an explicit error,
+                // and the protocol freezes. Better to see it right away.
+                logI(
+                    "BLE",
+                    "propriétés : live=${describeProps(characteristic)} history=${describeProps(history)} " +
+                        "sync=${describeProps(syncCtrl)} time=${describeProps(time)}",
+                )
                 emitState(ConnectionState.Connected)
+
+                // Order matters: subscribe first, otherwise the bracelet's first
+                // notifications go nowhere.
+                enqueue("abonnement live") { if (!enableNotifications(gatt, characteristic)) opDone() }
+
+                if (history == null || syncCtrl == null || time == null) {
+                    logW("BLE", "firmware sans rattrapage de backlog : écoute du direct uniquement")
+                    return
+                }
+
+                enqueue("abonnement history") { if (!enableNotifications(gatt, history)) opDone() }
+                enqueue("écriture TIME") {
+                    val epoch = Instant.now().epochSecond
+                    logI("SYNC", "envoi de l'heure au bracelet (epoch=$epoch)")
+                    if (!writeTo(gatt, time, BraceletMeasurementCodec.encodeEpoch(epoch))) opDone()
+                }
+                enqueue("écriture START") {
+                    logI("SYNC", "START -> demande du backlog")
+                    emitState(ConnectionState.Syncing)
+                    if (!writeTo(gatt, syncCtrl, BraceletMeasurementCodec.CMD_START)) opDone()
+                }
             }
 
+            // Android < 13 path: the value is carried by the characteristic.
+            @Deprecated("Replaced by the overload taking `value` since Android 13")
             @Suppress("DEPRECATION")
             override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-                handlePayload(gatt.device, characteristic.value)
+                dispatch(gatt, characteristic, characteristic.value ?: ByteArray(0))
             }
 
             override fun onCharacteristicChanged(
@@ -102,13 +339,82 @@ class BraceletBleClient(
                 characteristic: BluetoothGattCharacteristic,
                 value: ByteArray,
             ) {
-                handlePayload(gatt.device, value)
+                dispatch(gatt, characteristic, value)
+            }
+
+            private fun dispatch(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+                if (characteristic.uuid.toString().equals(config.historyCharacteristicUuid, ignoreCase = true)) {
+                    handleHistory(gatt, value)
+                } else {
+                    handlePayload(gatt.device, value)
+                }
+            }
+
+            /**
+             * A history packet. The ACK is only sent once the measurements are
+             * stored: that is the invariant of the protocol. If the app is killed
+             * here, the bracelet still has its stock and will resend the packet.
+             */
+            private fun handleHistory(gatt: BluetoothGatt, payload: ByteArray) {
+                val id = braceletIdentity ?: return
+                when (val packet = BraceletMeasurementCodec.decodeHistoryPacket(payload)) {
+                    is BraceletMeasurementCodec.HistoryPacket.End -> {
+                        logI("SYNC", "le bracelet annonce son stock vide -> passage en direct")
+                        emitState(ConnectionState.Live)
+                    }
+
+                    is BraceletMeasurementCodec.HistoryPacket.Invalid -> {
+                        // No ACK: the bracelet will resend after its timeout, and
+                        // nothing will have been flushed in the meantime.
+                        logW("SYNC", "paquet illisible (${packet.reason}) -> pas d'ACK, le bracelet renverra")
+                    }
+
+                    is BraceletMeasurementCodec.HistoryPacket.Data -> {
+                        packets++
+                        // The bracelet can start a new flush while we were already
+                        // live: the screen must say so.
+                        emitState(ConnectionState.Syncing)
+
+                        val measurements = packet.records.map { BraceletMeasurementCodec.toMeasurement(id, it) }
+                        received += measurements.size
+                        measurements.lastOrNull()?.let { trySend(BraceletEvent.MeasurementReceived(it)) }
+
+                        launch {
+                            val inserted = runCatching { onMeasurements(measurements) }.getOrElse { error ->
+                                logW("SYNC", "enregistrement local impossible (${error.message}) -> pas d'ACK")
+                                return@launch
+                            }
+                            val ignored = measurements.size - inserted
+                            deduped += ignored
+                            logI(
+                                "SYNC",
+                                "Paquet #$packets reçu (${measurements.size} mesures) -> inséré $inserted / " +
+                                    "ignoré $ignored (déjà vus) -> ACK",
+                            )
+                            val syncCtrl = gatt.getService(UUID.fromString(config.serviceUuid))
+                                ?.getCharacteristic(UUID.fromString(config.syncCtrlCharacteristicUuid))
+                            if (syncCtrl == null) {
+                                logW("SYNC", "SYNC_CTRL introuvable : impossible d'acquitter")
+                                return@launch
+                            }
+                            enqueue("écriture ACK") { if (!writeTo(gatt, syncCtrl, BraceletMeasurementCodec.CMD_ACK)) opDone() }
+                        }
+                    }
+                }
             }
 
             override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    emitState(ConnectionState.Connected)
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    logW("BLE", "abonnement refusé sur ${descriptor.characteristic.uuid} (status=$status)")
                 }
+                opDone()
+            }
+
+            override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    logW("SYNC", "écriture sur ${characteristic.uuid} refusée (status=$status)")
+                }
+                opDone()
             }
 
             private fun handlePayload(device: BluetoothDevice, payload: ByteArray) {
@@ -119,18 +425,35 @@ class BraceletBleClient(
                     deviceUid = config.deviceUid,
                 )
                 val measurement = BraceletMeasurementCodec.decode(identity, payload)
+                received++
                 trySend(BraceletEvent.MeasurementReceived(measurement))
+                // Live data goes through the same local database as history: it is
+                // the uploader that talks to the backend, not the BLE link.
+                launch { onMeasurements(listOf(measurement)) }
             }
         }
 
         fun connectToDevice(device: BluetoothDevice) {
+            currentDevice = device
+            braceletIdentity = BraceletIdentity.fromAndroidDevice(
+                macAddress = device.address,
+                deviceName = device.name ?: config.targetNameContains,
+                serialNumber = config.serialNumber,
+                deviceUid = config.deviceUid,
+            )
             trySend(BraceletEvent.Log("Connexion à ${device.address}..."))
             emitState(ConnectionState.Connecting)
             currentGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         }
+        reconnect = ::connectToDevice
 
         val directAddress = config.targetDeviceAddress
         if (!directAddress.isNullOrBlank()) {
+            // No scan in this mode: "back to scanning" = retry the address.
+            restartScan = {
+                runCatching { bluetoothAdapter.getRemoteDevice(directAddress) }
+                    .onSuccess { connectToDevice(it) }
+            }
             runCatching { bluetoothAdapter.getRemoteDevice(directAddress) }
                 .onSuccess { connectToDevice(it) }
                 .onFailure { throwable ->
@@ -149,6 +472,8 @@ class BraceletBleClient(
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build()
 
+            var scanning = false
+
             val scanCallback = object : ScanCallback() {
                 override fun onScanResult(callbackType: Int, result: ScanResult) {
                     val device = result.device
@@ -156,46 +481,77 @@ class BraceletBleClient(
                     val matchesName = name.contains(config.targetNameContains, ignoreCase = true)
                     val matchesAddress = config.targetDeviceAddress.isNullOrBlank() || device.address.equals(config.targetDeviceAddress, ignoreCase = true)
 
+                    // Android can deliver several results before stopScan takes
+                    // effect: without this guard we open as many GATT connections
+                    // as there are callbacks, and writes go out on different
+                    // clients.
+                    if (currentDevice != null) return
+
                     if (matchesName && matchesAddress) {
                         scanner.stopScan(this)
+                        scanning = false
                         trySend(BraceletEvent.Log("Bracelet trouvé: ${device.address}"))
                         connectToDevice(device)
                     }
                 }
 
                 override fun onScanFailed(errorCode: Int) {
+                    scanning = false
                     trySend(BraceletEvent.Error("Échec du scan BLE: $errorCode"))
                     emitState(ConnectionState.Error)
                     close()
                 }
             }
 
-            emitState(ConnectionState.Scanning)
-            trySend(BraceletEvent.Log("Scan BLE en cours..."))
-            scanner.startScan(filters, scanSettings, scanCallback)
+            fun startScan() {
+                if (scanning || closing) return
+                scanning = true
+                emitState(ConnectionState.Scanning)
+                trySend(BraceletEvent.Log("Scan BLE en cours..."))
+                scanner.startScan(filters, scanSettings, scanCallback)
+            }
+            restartScan = ::startScan
+
+            startScan()
 
             awaitClose {
-                scanner.stopScan(scanCallback)
+                closing = true
+                clearOps()
+                if (scanning) scanner.stopScan(scanCallback)
                 currentGatt?.close()
                 currentGatt = null
+                BleLog.i("BLE", "session fermée (reçu=$received dédup=$deduped paquets=$packets)")
             }
             return@callbackFlow
         }
 
         awaitClose {
+            closing = true
+            clearOps()
             currentGatt?.close()
             currentGatt = null
         }
     }
 
+    /** true if a GATT write was started: otherwise the queue would stay blocked. */
     @SuppressLint("MissingPermission")
-    private fun enableNotifications(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+    private fun enableNotifications(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic): Boolean {
         gatt.setCharacteristicNotification(characteristic, true)
         val cccDescriptor = characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG)
-        if (cccDescriptor != null) {
-            cccDescriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        if (cccDescriptor == null) {
+            BleLog.w("BLE", "pas de descripteur CCCD sur ${characteristic.uuid}")
+            return false
+        }
+        val value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeDescriptor(cccDescriptor, value)
+        } else {
+            @Suppress("DEPRECATION")
+            cccDescriptor.value = value
+            @Suppress("DEPRECATION")
             gatt.writeDescriptor(cccDescriptor)
         }
+        return true
     }
 
     private fun findNotificationCharacteristic(gatt: BluetoothGatt): BluetoothGattCharacteristic? {
@@ -223,7 +579,26 @@ class BraceletBleClient(
         return null
     }
 
+    /** Readable summary of the GATT properties: "RWN", "-W-", "absente". */
+    private fun describeProps(characteristic: BluetoothGattCharacteristic?): String {
+        if (characteristic == null) return "absente"
+        val p = characteristic.properties
+        val read = if (p and BluetoothGattCharacteristic.PROPERTY_READ != 0) "R" else "-"
+        val write = if (p and BluetoothGattCharacteristic.PROPERTY_WRITE != 0) "W" else "-"
+        val notify = if (p and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) "N" else "-"
+        return "$read$write$notify"
+    }
+
     companion object {
         private val CLIENT_CHARACTERISTIC_CONFIG: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+
+        /** Past this, the GATT answer is considered lost and the queue is restarted. */
+        private const val OP_TIMEOUT_MS = 5_000L
+
+        /** Breathing room between two GATT operations: the Android stack dislikes immediate chaining. */
+        private const val OP_DISPATCH_DELAY_MS = 50L
+
+        /** Enough to fit a full history packet (2 + 20*8 = 162 B + 3 B of ATT). */
+        private const val WANTED_MTU = 247
     }
 }

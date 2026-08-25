@@ -53,6 +53,14 @@ class MeasurementsRepository(
         Unit
     }.onFailure(::handleUnauthorized)
 
+    /**
+     * The detail returned by the backend ("unknown bracelet", "missing field"...).
+     * It is what tells why a measurement is rejected: without it, the app could
+     * only show "pending" without ever giving the cause.
+     */
+    fun errorDetail(throwable: Throwable): String? =
+        (throwable as? HttpException)?.let(apiClientProvider::parseErrorDetail)
+
     private fun service() = apiClientProvider.getService(authRepository.baseUrl.value)
 
     private fun handleUnauthorized(throwable: Throwable) {

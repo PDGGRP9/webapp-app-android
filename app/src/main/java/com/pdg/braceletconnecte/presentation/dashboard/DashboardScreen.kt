@@ -294,7 +294,7 @@ private fun BleCard(
             DevicePill(label = uiState.connectionState.label, isActive = uiState.isBleRunning)
         }
         Text(
-            "Connexion au bracelet ESP32 et retransmission en direct vers le backend.",
+            "Suivi en direct de vos mesures depuis votre bracelet.",
             fontSize = 12.8.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -360,12 +360,15 @@ private fun blePermissions(): List<String> {
     }
 }
 
-private val ConnectionState.label: String
+internal val ConnectionState.label: String
     get() = when (this) {
         ConnectionState.Idle -> "Prêt"
         ConnectionState.Scanning -> "Scan BLE"
         ConnectionState.Connecting -> "Connexion"
         ConnectionState.Connected -> "Connecté"
+        ConnectionState.Syncing -> "Rattrapage"
+        ConnectionState.Live -> "Direct"
+        ConnectionState.Reconnecting -> "Reconnexion"
         ConnectionState.Publishing -> "Transmission"
         ConnectionState.Stopped -> "Arrêté"
         ConnectionState.Error -> "Erreur"
