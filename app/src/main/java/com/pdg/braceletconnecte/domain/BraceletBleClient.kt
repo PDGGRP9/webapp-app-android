@@ -201,6 +201,29 @@ class BraceletBleClient(
         }
 
         /**
+         * The user turned Bluetooth off in the Android settings. Retrying is
+         * pointless: `connectGatt` returns null and no callback ever comes back,
+         * so the session would hang on "Reconnecting" forever. We end it instead,
+         * and the user presses "Démarrer" again once Bluetooth is back.
+         *
+         * Nothing is lost: the bracelet flushes only after an ACK, so the backlog
+         * comes back on the next connection.
+         *
+         * @return true if Bluetooth is off and the session was ended.
+         */
+        fun abortIfBluetoothOff(): Boolean {
+            if (bluetoothAdapter.isEnabled) return false
+            clearOps()
+            currentGatt?.close()
+            currentGatt = null
+            currentDevice = null
+            trySend(BraceletEvent.Error("Bluetooth désactivé — réactivez-le puis appuyez sur Démarrer."))
+            emitState(ConnectionState.Error)
+            close()
+            return true
+        }
+
+        /**
          * Link lost: we retry, then go back to scanning. The bracelet has flushed
          * nothing — the sync will resume where it stopped and already known
          * measurements will be deduplicated on insert.
@@ -210,6 +233,8 @@ class BraceletBleClient(
             currentGatt?.close()
             currentGatt = null
             if (closing) return
+            // Bluetooth off is the one drop we cannot retry through.
+            if (abortIfBluetoothOff()) return
 
             attempt++
             if (attempt <= config.reconnectAttempts) {
@@ -444,6 +469,14 @@ class BraceletBleClient(
             trySend(BraceletEvent.Log("Connexion à ${device.address}..."))
             emitState(ConnectionState.Connecting)
             currentGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            // null = the Android stack refused to open a client (typically the
+            // adapter went off in between). No callback will ever come, so we
+            // must not just sit there waiting for one.
+            if (currentGatt == null && !abortIfBluetoothOff()) {
+                trySend(BraceletEvent.Error("Connexion BLE refusée par le système."))
+                emitState(ConnectionState.Error)
+                close()
+            }
         }
         reconnect = ::connectToDevice
 
@@ -488,7 +521,7 @@ class BraceletBleClient(
                     if (currentDevice != null) return
 
                     if (matchesName && matchesAddress) {
-                        scanner.stopScan(this)
+                        runCatching { scanner.stopScan(this) }
                         scanning = false
                         trySend(BraceletEvent.Log("Bracelet trouvé: ${device.address}"))
                         connectToDevice(device)
@@ -505,10 +538,23 @@ class BraceletBleClient(
 
             fun startScan() {
                 if (scanning || closing) return
+                if (abortIfBluetoothOff()) return
                 scanning = true
                 emitState(ConnectionState.Scanning)
                 trySend(BraceletEvent.Log("Scan BLE en cours..."))
-                scanner.startScan(filters, scanSettings, scanCallback)
+                // startScan throws IllegalStateException("BT Adapter is not turned
+                // ON") on several Android versions, and we are called from a
+                // binder thread: an escaping exception would kill the session
+                // without a word.
+                runCatching { scanner.startScan(filters, scanSettings, scanCallback) }
+                    .onFailure { throwable ->
+                        scanning = false
+                        if (!abortIfBluetoothOff()) {
+                            trySend(BraceletEvent.Error("Scan BLE impossible.", throwable))
+                            emitState(ConnectionState.Error)
+                            close()
+                        }
+                    }
             }
             restartScan = ::startScan
 
@@ -517,7 +563,9 @@ class BraceletBleClient(
             awaitClose {
                 closing = true
                 clearOps()
-                if (scanning) scanner.stopScan(scanCallback)
+                // Same as startScan: stopping on an adapter that is already off
+                // throws, and awaitClose must never let an exception escape.
+                if (scanning) runCatching { scanner.stopScan(scanCallback) }
                 currentGatt?.close()
                 currentGatt = null
                 BleLog.i("BLE", "session fermée (reçu=$received dédup=$deduped paquets=$packets)")

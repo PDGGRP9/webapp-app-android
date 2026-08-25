@@ -146,6 +146,12 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                             current.copy(connectionState = ConnectionState.Error, lastError = event.message)
                         }
                         appendLog(event.message)
+                        // The session is over (Bluetooth turned off, scan refused...).
+                        // We release the job right away, otherwise the "already
+                        // running" guard would turn the "Démarrer" button into a
+                        // no-op.
+                        bleSessionJob?.cancel()
+                        bleSessionJob = null
                     }
 
                     is BraceletEvent.MeasurementReceived -> {
