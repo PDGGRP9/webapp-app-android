@@ -4,7 +4,6 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface MeasurementDao {
@@ -22,9 +21,6 @@ interface MeasurementDao {
 
     @Query("UPDATE measurements SET sent = 1 WHERE deviceUid = :deviceUid AND ts = :ts")
     suspend fun markSent(deviceUid: String, ts: Long)
-
-    @Query("SELECT COUNT(*) FROM measurements WHERE sent = 0")
-    fun pendingCount(): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM measurements")
     suspend fun total(): Int

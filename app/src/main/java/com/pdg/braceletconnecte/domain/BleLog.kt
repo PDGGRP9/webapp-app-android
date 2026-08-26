@@ -3,12 +3,7 @@ package com.pdg.braceletconnecte.domain
 import android.util.Log
 
 /**
- * Logging for the BLE link.
- *
- * Every line goes to two places: logcat (for whoever has a USB cable) and the
- * log shown inside the app (for whoever has none and still needs to describe
- * their problem). A single method does both: it writes to logcat and returns the
- * formatted line, which the caller pushes into the UI.
+ * Logging for the BLE link, to logcat only.
  *
  * We keep the `[TAG] message` convention already used throughout the repo and on
  * the firmware side: both traces read side by side.
@@ -18,25 +13,16 @@ import android.util.Log
  * Tags: BLE (link), SYNC (protocol), STATE (full state), Storage (local
  * database), Upload (backend upload).
  */
+// Log for debugging: every line below goes to logcat only, never to the UI.
 object BleLog {
     const val TAG = "BRASCO"
 
-    fun i(tag: String, message: String): String = emit('I', tag, message)
-    fun w(tag: String, message: String): String = emit('W', tag, message)
-    fun e(tag: String, message: String, throwable: Throwable? = null): String {
-        val line = format('E', tag, message)
-        Log.e(TAG, line, throwable)
-        return line
-    }
+    fun i(tag: String, message: String) = Log.i(TAG, format('I', tag, message))
 
-    private fun emit(level: Char, tag: String, message: String): String {
-        val line = format(level, tag, message)
-        when (level) {
-            'W' -> Log.w(TAG, line)
-            else -> Log.i(TAG, line)
-        }
-        return line
-    }
+    fun w(tag: String, message: String) = Log.w(TAG, format('W', tag, message))
+
+    fun e(tag: String, message: String, throwable: Throwable? = null) =
+        Log.e(TAG, format('E', tag, message), throwable)
 
     private fun format(level: Char, tag: String, message: String): String {
         // The level only shows when it is out of the ordinary: every other line

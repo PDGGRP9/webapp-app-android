@@ -38,6 +38,7 @@ class ApiClientProvider(
             .readTimeout(15, TimeUnit.SECONDS)
             .addInterceptor(AuthInterceptor(tokenHolder))
 
+        // Log for debugging: HTTP traces in debug builds only
         if (BuildConfig.DEBUG) {
             clientBuilder.addInterceptor(
                 HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC },

@@ -19,9 +19,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
 class DashboardViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -43,7 +40,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         // right away, without waiting for its 5 s tick.
         measurementStore.save(measurements).also { app.uploader.nudge() }
     }
-    private val timestampFormatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault())
 
     private val _uiState = MutableStateFlow(DashboardUiState())
     val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
@@ -56,24 +52,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         val displayName = user?.firstName?.takeIf { it.isNotBlank() } ?: user?.username.orEmpty()
         _uiState.update { it.copy(userDisplayName = displayName) }
         startPolling()
-        observeLocalQueue()
-        observeUploadLog()
-    }
-
-    /** [Upload] lines join the on-screen log, next to the [SYNC] ones. */
-    private fun observeUploadLog() {
-        viewModelScope.launch {
-            app.uploader.log.collect { line -> appendLog(line) }
-        }
-    }
-
-    /** Measurements in the database the backend has not accepted yet. */
-    private fun observeLocalQueue() {
-        viewModelScope.launch {
-            measurementStore.pendingCount().collect { count ->
-                _uiState.update { it.copy(localPending = count) }
-            }
-        }
     }
 
     private fun currentUserId(): Long? = (authRepository.authState.value as? AuthState.LoggedIn)?.user?.id
@@ -128,7 +106,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                 stoppedByUser = false,
                 connectionState = ConnectionState.Scanning,
                 lastError = null,
-                logLines = prependLog(it.logLines, "Démarrage du flux BLE"),
             )
         }
 
@@ -139,13 +116,10 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                         _uiState.update { current -> current.copy(connectionState = event.state) }
                     }
 
-                    is BraceletEvent.Log -> appendLog(event.message)
-
                     is BraceletEvent.Error -> {
                         _uiState.update { current ->
                             current.copy(connectionState = ConnectionState.Error, lastError = event.message)
                         }
-                        appendLog(event.message)
                         // The session is over (Bluetooth turned off, scan refused...).
                         // We release the job right away, otherwise the "already
                         // running" guard would turn the "Démarrer" button into a
@@ -169,7 +143,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             current.copy(
                 stoppedByUser = true,
                 connectionState = ConnectionState.Stopped,
-                logLines = prependLog(current.logLines, "Flux BLE arrêté"),
             )
         }
     }
@@ -180,7 +153,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                 connectionState = ConnectionState.Connected,
                 latestBleMeasurement = measurement,
                 lastError = null,
-                logLines = prependLog(current.logLines, "Mesure reçue ${formatTimestamp(measurement.capturedAt)}"),
                 pendingPairingCandidate = if (!current.isPaired && !current.pairingPromptDismissed && current.pendingPairingCandidate == null) {
                     measurement
                 } else {
@@ -231,29 +203,9 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch { authRepository.logout() }
     }
 
-    private fun appendLog(message: String) {
-        _uiState.update { current -> current.copy(logLines = prependLog(current.logLines, message)) }
-    }
-
-    /** Full log, to paste into a ticket ("Copy" button). */
-    fun logsAsText(): String = _uiState.value.logLines.asReversed().joinToString("\n")
-
-    private fun prependLog(logLines: List<String>, message: String): List<String> {
-        val line = "${timestampFormatter.format(Instant.now())}  $message"
-        // 200 lines: enough to cover a full sync and its resume after a drop,
-        // which is exactly what we want to be able to read back.
-        return (listOf(line) + logLines).take(MAX_LOG_LINES)
-    }
-
-    private fun formatTimestamp(instant: Instant): String = timestampFormatter.format(instant)
-
     override fun onCleared() {
         super.onCleared()
         bleSessionJob?.cancel()
         pollJob?.cancel()
-    }
-
-    private companion object {
-        const val MAX_LOG_LINES = 200
     }
 }

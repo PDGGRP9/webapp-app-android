@@ -7,9 +7,6 @@ import com.pdg.braceletconnecte.data.local.toDomain
 import com.pdg.braceletconnecte.domain.BleLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -43,11 +40,6 @@ class MeasurementUploader(
     // MAX_ATTEMPTS we drop it to unblock the rest.
     private var lastFailedKey: String? = null
     private var failStreak = 0
-
-    // Upload log. The same lines as in logcat, but also displayable inside the
-    // app: without a USB cable, "pending" never said why.
-    private val _log = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 16)
-    val log: SharedFlow<String> = _log.asSharedFlow()
 
     // CONFLATED: ten measurements in a row trigger one pass, not ten.
     private val wakeUp = Channel<Unit>(Channel.CONFLATED)
@@ -134,13 +126,11 @@ class MeasurementUploader(
         return if (batch.size == BATCH_SIZE) 0L else IDLE_DELAY_MS
     }
 
-    private fun info(message: String) {
-        _log.tryEmit(BleLog.i("Upload", message))
-    }
+    // Log for debugging
+    private fun info(message: String) = BleLog.i("Upload", message)
 
-    private fun warn(message: String) {
-        _log.tryEmit(BleLog.w("Upload", message))
-    }
+    // Log for debugging
+    private fun warn(message: String) = BleLog.w("Upload", message)
 
     private companion object {
         const val BATCH_SIZE = 50

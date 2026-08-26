@@ -107,10 +107,14 @@ class BraceletBleClient(
         var opStartedAt = 0L
         val gattHandler = Handler(Looper.getMainLooper())
 
-        fun logI(tag: String, message: String) = trySend(BraceletEvent.Log(BleLog.i(tag, message)))
-        fun logW(tag: String, message: String) = trySend(BraceletEvent.Log(BleLog.w(tag, message)))
+        // Log for debugging
+        fun logI(tag: String, message: String) = BleLog.i(tag, message)
 
-        /** Counterpart of the firmware's [STATE]: to paste into a ticket. */
+        // Log for debugging
+        fun logW(tag: String, message: String) = BleLog.w(tag, message)
+
+        // Log for debugging
+        /** Counterpart of the firmware's [STATE], mirrored in logcat. */
         fun logState(state: ConnectionState) {
             BleLog.i(
                 "STATE",
@@ -273,13 +277,13 @@ class BraceletBleClient(
                         gattHandler.post {
                             if (!gatt.requestMtu(WANTED_MTU)) {
                                 logW("BLE", "négociation du MTU refusée -> découverte directe (paquets limités à 20 octets)")
-                                trySend(BraceletEvent.Log("Services en cours de découverte..."))
+                                logI("BLE", "découverte des services en cours")
                                 gatt.discoverServices()
                             }
                         }
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
-                        trySend(BraceletEvent.Log("Bracelet déconnecté."))
+                        logI("BLE", "bracelet déconnecté")
                         // We no longer close the flow: we retry, then rescan.
                         handleLostLink(status)
                     }
@@ -292,7 +296,7 @@ class BraceletBleClient(
                 val usable = mtu - 3
                 logI("BLE", "MTU négocié = $mtu octets ($usable utiles, il en faut 162 pour un paquet plein)")
                 gattHandler.post {
-                    trySend(BraceletEvent.Log("Services en cours de découverte..."))
+                    logI("BLE", "découverte des services en cours")
                     gatt.discoverServices()
                 }
             }
@@ -319,7 +323,7 @@ class BraceletBleClient(
                 val syncCtrl = service?.getCharacteristic(UUID.fromString(config.syncCtrlCharacteristicUuid))
                 val time = service?.getCharacteristic(UUID.fromString(config.timeCharacteristicUuid))
 
-                trySend(BraceletEvent.Log("Notifications activées sur ${characteristic.uuid}."))
+                logI("BLE", "notifications activées sur ${characteristic.uuid}")
                 // We log the declared properties: a characteristic without the W
                 // bit is refused for writing by Android without an explicit error,
                 // and the protocol freezes. Better to see it right away.
@@ -466,7 +470,7 @@ class BraceletBleClient(
                 serialNumber = config.serialNumber,
                 deviceUid = config.deviceUid,
             )
-            trySend(BraceletEvent.Log("Connexion à ${device.address}..."))
+            logI("BLE", "connexion à ${device.address}")
             emitState(ConnectionState.Connecting)
             currentGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
             // null = the Android stack refused to open a client (typically the
@@ -523,7 +527,7 @@ class BraceletBleClient(
                     if (matchesName && matchesAddress) {
                         runCatching { scanner.stopScan(this) }
                         scanning = false
-                        trySend(BraceletEvent.Log("Bracelet trouvé: ${device.address}"))
+                        logI("BLE", "bracelet trouvé: ${device.address}")
                         connectToDevice(device)
                     }
                 }
@@ -541,7 +545,7 @@ class BraceletBleClient(
                 if (abortIfBluetoothOff()) return
                 scanning = true
                 emitState(ConnectionState.Scanning)
-                trySend(BraceletEvent.Log("Scan BLE en cours..."))
+                logI("BLE", "scan BLE en cours")
                 // startScan throws IllegalStateException("BT Adapter is not turned
                 // ON") on several Android versions, and we are called from a
                 // binder thread: an escaping exception would kill the session
@@ -568,6 +572,7 @@ class BraceletBleClient(
                 if (scanning) runCatching { scanner.stopScan(scanCallback) }
                 currentGatt?.close()
                 currentGatt = null
+                // Log for debugging
                 BleLog.i("BLE", "session fermée (reçu=$received dédup=$deduped paquets=$packets)")
             }
             return@callbackFlow
@@ -587,6 +592,7 @@ class BraceletBleClient(
         gatt.setCharacteristicNotification(characteristic, true)
         val cccDescriptor = characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG)
         if (cccDescriptor == null) {
+            // Log for debugging
             BleLog.w("BLE", "pas de descripteur CCCD sur ${characteristic.uuid}")
             return false
         }

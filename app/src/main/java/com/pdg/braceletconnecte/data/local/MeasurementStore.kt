@@ -4,7 +4,6 @@ import com.pdg.braceletconnecte.domain.BiometricMeasurement
 import com.pdg.braceletconnecte.domain.BleLog
 import com.pdg.braceletconnecte.domain.BraceletMeasurementCodec.PLAUSIBLE_HR
 import com.pdg.braceletconnecte.domain.BraceletMeasurementCodec.PLAUSIBLE_SPO2
-import kotlinx.coroutines.flow.Flow
 
 /**
  * Single entry point to the local database.
@@ -22,6 +21,7 @@ class MeasurementStore(private val dao: MeasurementDao) {
         val inserted = dao.insertAll(rows).count { it != -1L }
         val ignored = measurements.size - inserted
         if (ignored > 0) {
+            // Log for debugging
             BleLog.i("Storage", "$inserted insérées / $ignored déjà connues (dédup par ts)")
         }
         return inserted
@@ -30,8 +30,6 @@ class MeasurementStore(private val dao: MeasurementDao) {
     suspend fun pendingToUpload(limit: Int = 50): List<MeasurementEntity> = dao.pendingToUpload(limit)
 
     suspend fun markSent(entity: MeasurementEntity) = dao.markSent(entity.deviceUid, entity.ts)
-
-    fun pendingCount(): Flow<Int> = dao.pendingCount()
 }
 
 fun BiometricMeasurement.toEntity(): MeasurementEntity = MeasurementEntity(

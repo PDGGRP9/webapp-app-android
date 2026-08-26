@@ -11,7 +11,6 @@ data class DashboardUiState(
     val connectionState: ConnectionState = ConnectionState.Idle,
     val latestBleMeasurement: BiometricMeasurement? = null,
     val lastError: String? = null,
-    val logLines: List<String> = emptyList(),
     val bracelets: List<BraceletDto> = emptyList(),
     val recentMeasurements: List<MeasurementDto> = emptyList(),
     val statistics: StatisticsDto? = null,
@@ -19,8 +18,6 @@ data class DashboardUiState(
     val pairingPromptDismissed: Boolean = false,
     val isPairing: Boolean = false,
     val isRefreshing: Boolean = false,
-    /** Measurements in the local database not yet accepted by the backend. */
-    val localPending: Int = 0,
     /** The user pressed "Stop": don't restart on our own. */
     val stoppedByUser: Boolean = false,
 ) {
