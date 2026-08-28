@@ -27,9 +27,8 @@ import com.pdg.braceletconnecte.presentation.components.AppButtonVariant
 import com.pdg.braceletconnecte.presentation.components.AppCard
 import com.pdg.braceletconnecte.presentation.components.AppScaffold
 import com.pdg.braceletconnecte.presentation.components.AppSelect
-import com.pdg.braceletconnecte.presentation.components.BarChartCanvas
 import com.pdg.braceletconnecte.presentation.components.DataTable
-import com.pdg.braceletconnecte.presentation.components.LineChartCanvas
+import com.pdg.braceletconnecte.presentation.components.DensityLineChartCanvas
 import com.pdg.braceletconnecte.presentation.components.SegmentedControl
 import com.pdg.braceletconnecte.presentation.components.SegmentedOption
 import com.pdg.braceletconnecte.presentation.components.StatRow
@@ -37,6 +36,7 @@ import com.pdg.braceletconnecte.presentation.components.StatRowItem
 import com.pdg.braceletconnecte.presentation.components.formatNumber
 import com.pdg.braceletconnecte.presentation.components.formatShortTime
 import com.pdg.braceletconnecte.presentation.components.headerDate
+import java.time.Instant
 
 @Composable
 fun StatsScreen(
@@ -46,16 +46,35 @@ fun StatsScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var showRawTable by remember { mutableStateOf(false) }
 
-    val cutoff = uiState.range.cutoff()
+    val now = Instant.now()
+    val config = uiState.range.config()
+    val domainStart = now.minusSeconds(uiState.range.hours * 3600)
     val filtered = uiState.measurements.mapNotNull { measurement ->
         val instant = measurement.capturedAtInstant() ?: return@mapNotNull null
-        if (instant.isBefore(cutoff)) null else measurement to instant
+        if (instant.isBefore(domainStart)) null else measurement to instant
     }
-    val chartPoints = filtered.mapNotNull { (measurement, instant) ->
+    val rawPairs = filtered.mapNotNull { (measurement, instant) ->
         uiState.metric.valueOf(measurement)?.let { instant to it.toFloat() }
     }
-    val values = chartPoints.map { it.second }
-    val minDomain = if (uiState.metric == StatsMetric.STEPS) 0f else null
+    val isStepMetric = uiState.metric == StatsMetric.STEPS
+
+    // Red curve: bucket-averaged points, spaced out for readability instead of one point per
+    // raw sample. Blue overlay is skipped for steps — a "moving average" of a counter that
+    // resets to 0 every midnight doesn't read as a trend; dashed day-boundary markers replace it.
+    val chartData = bucketAverage(rawPairs, config.pointBucketMs)
+    val averageData = if (isStepMetric) emptyList() else bucketAverage(rawPairs, config.averageBucketMs)
+
+    // step_count resets every midnight, so a plain avg/min/max over raw values is meaningless
+    // (min is trivially ~0, avg mixes numbers from different days). Instead, reduce to one
+    // "day's total" per day present, then summarize those.
+    val summaryValues = if (isStepMetric) dailyTotals(rawPairs) else rawPairs.map { it.second }
+    val lastRecord = filtered.maxByOrNull { it.second }
+    val avg = summaryValues.takeIf { it.isNotEmpty() }?.average()
+    val min = summaryValues.minOrNull()?.toDouble()
+    val max = summaryValues.maxOrNull()?.toDouble()
+    val last = lastRecord?.let { uiState.metric.valueOf(it.first) }
+    val suffix = uiState.metric.suffix()
+    val minDomain = if (isStepMetric) 0f else null
 
     AppScaffold(navController = navController) { padding ->
         Column(
@@ -88,25 +107,27 @@ fun StatsScreen(
                     selected = uiState.range,
                     onSelect = viewModel::selectRange,
                 )
-                SegmentedControl(
-                    options = ChartKind.entries.map { SegmentedOption(it, it.label) },
-                    selected = uiState.chartKind,
-                    onSelect = viewModel::selectChartKind,
-                )
             }
 
             AppCard(title = uiState.metric.label) {
-                if (uiState.chartKind == ChartKind.Line) {
-                    LineChartCanvas(points = chartPoints, minDomain = minDomain)
-                } else {
-                    BarChartCanvas(points = chartPoints, minDomain = minDomain)
-                }
+                DensityLineChartCanvas(
+                    data = chartData,
+                    averageData = averageData,
+                    domainStart = domainStart,
+                    domainEnd = now,
+                    gapMs = config.rawGapMs,
+                    averageGapMs = config.averageGapMs,
+                    minDomain = minDomain,
+                    valueSuffix = suffix,
+                    showDayBoundaries = isStepMetric,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 StatRow(
                     items = listOf(
-                        StatRowItem(formatNumber(values.average().takeIf { !it.isNaN() }), "Moyenne"),
-                        StatRowItem(formatNumber(values.minOrNull()?.toDouble()), "Min"),
-                        StatRowItem(formatNumber(values.maxOrNull()?.toDouble()), "Max"),
-                        StatRowItem(formatNumber(values.lastOrNull()?.toDouble()), "Dernière"),
+                        StatRowItem(formatNumber(avg), if (isStepMetric) "Moyenne / jour" else "Moyenne"),
+                        StatRowItem(formatNumber(min), if (isStepMetric) "Jour min" else "Min"),
+                        StatRowItem(formatNumber(max), if (isStepMetric) "Jour max" else "Max"),
+                        StatRowItem(formatNumber(last), if (isStepMetric) "Aujourd'hui" else "Dernière"),
                     ),
                 )
             }
@@ -138,4 +159,11 @@ fun StatsScreen(
             }
         }
     }
+}
+
+private fun StatsMetric.suffix(): String = when (this) {
+    StatsMetric.HEART_RATE -> " bpm"
+    StatsMetric.SPO2 -> " %"
+    StatsMetric.STEPS -> ""
+    StatsMetric.SIGNAL -> " %"
 }
