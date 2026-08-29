@@ -1,7 +1,7 @@
 package com.pdg.braceletconnecte.presentation.stats
 
 import java.time.Instant
-import java.time.ZoneOffset
+import java.time.ZoneId
 
 /** A single point on a chart, already reduced to one bucket. */
 data class ChartPoint(val instant: Instant, val value: Float)
@@ -42,13 +42,14 @@ fun splitByGap(points: List<ChartPoint>, gapMs: Long): List<List<ChartPoint>> {
 
 /**
  * For a counter that resets every calendar day (e.g. step_count), the highest value seen on
- * each UTC day — i.e. that day's running total — one entry per day present. Mirrors the web
- * frontend's `dailyTotals`.
+ * each local calendar day — i.e. that day's running total — one entry per day present. Mirrors
+ * the web frontend's `dailyTotals`.
  */
 fun dailyTotals(points: List<Pair<Instant, Float>>): List<Float> {
+    val zone = ZoneId.systemDefault()
     val byDay = LinkedHashMap<Long, Float>()
     for ((instant, value) in points) {
-        val day = instant.atZone(ZoneOffset.UTC).toLocalDate().toEpochDay()
+        val day = instant.atZone(zone).toLocalDate().toEpochDay()
         val current = byDay[day]
         if (current == null || value > current) byDay[day] = value
     }
