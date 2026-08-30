@@ -164,6 +164,7 @@ fun StatsScreen(
                         ),
                         StatRowItem(formatNumber(last), if (isStepMetric) "Aujourd'hui" else "Dernière"),
                     ),
+                    valueFontSize = 15.sp,
                 )
             }
 

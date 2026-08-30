@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -19,6 +20,7 @@ fun MetricCard(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
+    valueFontSize: TextUnit = 20.sp,
 ) {
     val lineColor = MaterialTheme.colorScheme.outline
     Column(
@@ -34,7 +36,7 @@ fun MetricCard(
             .padding(top = 8.8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(value, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+        Text(value, fontSize = valueFontSize, fontWeight = FontWeight.ExtraBold)
         MicroLabel(text = label, modifier = Modifier.padding(top = 1.6.dp))
     }
 }
