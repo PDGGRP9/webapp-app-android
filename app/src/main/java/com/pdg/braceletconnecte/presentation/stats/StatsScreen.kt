@@ -22,11 +22,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.pdg.braceletconnecte.data.api.dto.capturedAtInstant
+import com.pdg.braceletconnecte.presentation.components.APP_ZONE
 import com.pdg.braceletconnecte.presentation.components.AppButton
 import com.pdg.braceletconnecte.presentation.components.AppButtonVariant
 import com.pdg.braceletconnecte.presentation.components.AppCard
 import com.pdg.braceletconnecte.presentation.components.AppScaffold
 import com.pdg.braceletconnecte.presentation.components.AppSelect
+import com.pdg.braceletconnecte.presentation.components.BarChartCanvas
 import com.pdg.braceletconnecte.presentation.components.DataTable
 import com.pdg.braceletconnecte.presentation.components.DensityLineChartCanvas
 import com.pdg.braceletconnecte.presentation.components.SegmentedControl
@@ -37,6 +39,11 @@ import com.pdg.braceletconnecte.presentation.components.formatNumber
 import com.pdg.braceletconnecte.presentation.components.formatShortTime
 import com.pdg.braceletconnecte.presentation.components.headerDate
 import java.time.Instant
+import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle as JavaTextStyle
+import java.util.Locale
+
+private const val DAYS_IN_WEEK = 7
 
 @Composable
 fun StatsScreen(
@@ -47,8 +54,11 @@ fun StatsScreen(
     var showRawTable by remember { mutableStateOf(false) }
 
     val now = Instant.now()
-    val config = uiState.range.config()
-    val domainStart = now.minusSeconds(uiState.range.hours * 3600)
+    val isStepMetric = uiState.metric == StatsMetric.STEPS
+    // bpm/spo2 have no range toggle any more — they're always the 7-day view.
+    val range = if (isStepMetric) uiState.stepRange else StatsRange.LAST_7D
+    val domainStart = now.minusSeconds(range.hours * 3600)
+
     val filtered = uiState.measurements.mapNotNull { measurement ->
         val instant = measurement.capturedAtInstant() ?: return@mapNotNull null
         if (instant.isBefore(domainStart)) null else measurement to instant
@@ -56,25 +66,38 @@ fun StatsScreen(
     val rawPairs = filtered.mapNotNull { (measurement, instant) ->
         uiState.metric.valueOf(measurement)?.let { instant to it.toFloat() }
     }
-    val isStepMetric = uiState.metric == StatsMetric.STEPS
 
-    // Red curve: bucket-averaged points, spaced out for readability instead of one point per
-    // raw sample. Blue overlay is skipped for steps — a "moving average" of a counter that
-    // resets to 0 every midnight doesn't read as a trend; dashed day-boundary markers replace it.
-    val chartData = bucketAverage(rawPairs, config.pointBucketMs)
-    val averageData = if (isStepMetric) emptyList() else bucketAverage(rawPairs, config.averageBucketMs)
+    // step_count: bar chart of per-period deltas, computed from the *unfiltered* history — the
+    // hourly bucketing needs data before the visible window to seed its running-total baseline.
+    val allStepPairs = uiState.measurements.mapNotNull { measurement ->
+        measurement.capturedAtInstant()?.let { it to measurement.stepCount.toFloat() }
+    }
+    val stepBarData = when {
+        !isStepMetric -> emptyList()
+        range == StatsRange.LAST_24H -> hourlyStepDeltas(allStepPairs, now.toEpochMilli())
+        else -> dailyStepTotals(allStepPairs, DAYS_IN_WEEK, now.toEpochMilli())
+    }
 
-    // step_count resets every midnight, so a plain avg/min/max over raw values is meaningless
-    // (min is trivially ~0, avg mixes numbers from different days). Instead, reduce to one
-    // "day's total" per day present, then summarize those.
-    val summaryValues = if (isStepMetric) dailyTotals(rawPairs) else rawPairs.map { it.second }
-    val lastRecord = filtered.maxByOrNull { it.second }
-    val avg = summaryValues.takeIf { it.isNotEmpty() }?.average()
+    // heart_rate_bpm/spo2_percent: smoothed 7-day line chart.
+    val chartData = if (isStepMetric) emptyList() else bucketAverage(rawPairs, LINE_CHART_CONFIG.pointBucketMs)
+    val averageData = if (isStepMetric) emptyList() else bucketAverage(rawPairs, LINE_CHART_CONFIG.averageBucketMs)
+
+    // Summary numbers always reflect a fixed 7-day window, independent of which bar-chart range
+    // is selected for steps, so the "Résumé" card never jumps around when 24h/7j is toggled.
+    val summaryDomainStart = now.minusSeconds(StatsRange.LAST_7D.hours * 3600)
+    val summaryPairs = uiState.measurements.mapNotNull { measurement ->
+        val instant = measurement.capturedAtInstant() ?: return@mapNotNull null
+        if (instant.isBefore(summaryDomainStart)) return@mapNotNull null
+        val value = uiState.metric.valueOf(measurement) ?: return@mapNotNull null
+        instant to value.toFloat()
+    }
+    val summaryValues = if (isStepMetric) dailyTotals(summaryPairs) else summaryPairs.map { it.second }
+    val lastPair = summaryPairs.maxByOrNull { it.first }
+    val avg = summaryValues.takeIf { it.isNotEmpty() }?.map { it.toDouble() }?.average()
     val min = summaryValues.minOrNull()?.toDouble()
     val max = summaryValues.maxOrNull()?.toDouble()
-    val last = lastRecord?.let { uiState.metric.valueOf(it.first) }
+    val last = lastPair?.second?.toDouble()
     val suffix = uiState.metric.suffix()
-    val minDomain = if (isStepMetric) 0f else null
 
     AppScaffold(navController = navController) { padding ->
         Column(
@@ -102,26 +125,36 @@ fun StatsScreen(
                     optionLabel = { it.label },
                     onSelect = viewModel::selectMetric,
                 )
-                SegmentedControl(
-                    options = StatsRange.entries.map { SegmentedOption(it, it.label) },
-                    selected = uiState.range,
-                    onSelect = viewModel::selectRange,
-                )
+                if (isStepMetric) {
+                    SegmentedControl(
+                        options = StatsRange.entries.map { SegmentedOption(it, it.label) },
+                        selected = uiState.stepRange,
+                        onSelect = viewModel::selectStepRange,
+                    )
+                }
             }
 
             AppCard(title = uiState.metric.label) {
-                DensityLineChartCanvas(
-                    data = chartData,
-                    averageData = averageData,
-                    domainStart = domainStart,
-                    domainEnd = now,
-                    gapMs = config.rawGapMs,
-                    averageGapMs = config.averageGapMs,
-                    minDomain = minDomain,
-                    valueSuffix = suffix,
-                    showDayBoundaries = isStepMetric,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (isStepMetric) {
+                    BarChartCanvas(
+                        data = stepBarData,
+                        valueSuffix = suffix,
+                        formatAxisLabel = { instant -> if (range == StatsRange.LAST_24H) hourAxisLabel(instant) else dayAxisLabel(instant) },
+                        formatTooltipLabel = { instant -> if (range == StatsRange.LAST_24H) hourTooltipLabel(instant) else dayTooltipLabel(instant) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    DensityLineChartCanvas(
+                        data = chartData,
+                        averageData = averageData,
+                        domainStart = domainStart,
+                        domainEnd = now,
+                        gapMs = LINE_CHART_CONFIG.rawGapMs,
+                        averageGapMs = LINE_CHART_CONFIG.averageGapMs,
+                        valueSuffix = suffix,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 StatRow(
                     items = listOf(
                         StatRowItem(formatNumber(avg), if (isStepMetric) "Moyenne / jour" else "Moyenne"),
@@ -165,5 +198,22 @@ private fun StatsMetric.suffix(): String = when (this) {
     StatsMetric.HEART_RATE -> " bpm"
     StatsMetric.SPO2 -> " %"
     StatsMetric.STEPS -> ""
-    StatsMetric.SIGNAL -> " %"
+}
+
+private fun hourAxisLabel(instant: Instant): String = "${instant.atZone(APP_ZONE).hour}h"
+
+private fun hourTooltipLabel(instant: Instant): String {
+    val hour = instant.atZone(APP_ZONE).hour
+    return "${hour}h – ${(hour + 1) % 24}h"
+}
+
+private fun dayAxisLabel(instant: Instant): String =
+    instant.atZone(APP_ZONE).dayOfWeek.getDisplayName(JavaTextStyle.SHORT, Locale.FRENCH)
+        .replaceFirstChar { it.uppercase(Locale.FRENCH) }
+
+private fun dayTooltipLabel(instant: Instant): String {
+    val zoned = instant.atZone(APP_ZONE)
+    val weekday = zoned.dayOfWeek.getDisplayName(JavaTextStyle.FULL, Locale.FRENCH)
+        .replaceFirstChar { it.uppercase(Locale.FRENCH) }
+    return "$weekday ${zoned.format(DateTimeFormatter.ofPattern("d MMMM", Locale.FRENCH))}"
 }

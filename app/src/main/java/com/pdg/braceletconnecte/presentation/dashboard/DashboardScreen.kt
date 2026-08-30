@@ -62,6 +62,7 @@ import com.pdg.braceletconnecte.presentation.components.headerDate
 import com.pdg.braceletconnecte.presentation.components.initials
 import com.pdg.braceletconnecte.presentation.components.timeAgo
 import com.pdg.braceletconnecte.presentation.navigation.AppRoutes
+import com.pdg.braceletconnecte.presentation.stats.hourlyStepDeltas
 
 @Composable
 fun DashboardScreen(
@@ -82,12 +83,17 @@ fun DashboardScreen(
     val last = uiState.lastMeasurement
     val heartRate = live?.heartRateBpm ?: last?.heartRateBpm
     val spo2 = live?.spo2Percent ?: last?.spo2Percent
-    val stepCount = live?.stepCount ?: last?.stepCount
-    val signalQuality = live?.signalQuality ?: last?.signalQuality
     val lastCapturedAt = live?.capturedAt ?: last?.capturedAtInstant()
     val braceletLabel = uiState.bracelets.firstOrNull()?.displayName
         ?: uiState.bracelets.firstOrNull()?.serialNumber
         ?: "Aucun bracelet"
+
+    // step_count only tracks "today so far" (it resets at local midnight), so a true rolling
+    // last-24h total is computed separately by summing the hourly deltas.
+    val steps24hPairs = uiState.recentMeasurements.mapNotNull { measurement ->
+        measurement.capturedAtInstant()?.let { it to measurement.stepCount.toFloat() }
+    }
+    val steps24h = hourlyStepDeltas(steps24hPairs).sumOf { it.value.toDouble() }
 
     AppScaffold(navController = navController) { padding ->
         Column(
@@ -147,39 +153,21 @@ fun DashboardScreen(
                 )
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(9.6.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(11.2.dp)) {
-                    MetricTile(
-                        icon = "🩸",
-                        name = "SpO2",
-                        value = formatNumber(spo2, " %"),
-                        isLive = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    MetricTile(
-                        icon = "👣",
-                        name = "Pas cumulés",
-                        value = formatNumber(stepCount?.toDouble()),
-                        isLive = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(11.2.dp)) {
-                    MetricTile(
-                        icon = "📶",
-                        name = "Qualité signal",
-                        value = formatNumber(signalQuality?.toDouble(), " %"),
-                        isLive = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    MetricTile(
-                        icon = "🧘",
-                        name = "Variabilité (HRV)",
-                        value = "-",
-                        badgeText = "Bientôt",
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(11.2.dp)) {
+                MetricTile(
+                    icon = "🩸",
+                    name = "SpO2",
+                    value = formatNumber(spo2, " %"),
+                    isLive = true,
+                    modifier = Modifier.weight(1f),
+                )
+                MetricTile(
+                    icon = "👣",
+                    name = "Pas (24h)",
+                    value = formatNumber(steps24h),
+                    isLive = true,
+                    modifier = Modifier.weight(1f),
+                )
             }
 
             BleCard(
