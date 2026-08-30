@@ -6,7 +6,16 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private val shortTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault())
+/**
+ * The bracelet fleet and its demo data are all pinned to Switzerland (see the backend seed data
+ * and fake-emitter, which both bucket step_count by Europe/Zurich local days) — so the app shows
+ * every timestamp in that zone rather than the device's own system zone. A device left on UTC
+ * (or any other zone) would otherwise disagree with the server about where a day starts,
+ * desyncing the step-count reset from the chart's day-boundary marker.
+ */
+val APP_ZONE: ZoneId = ZoneId.of("Europe/Zurich")
+
+private val shortTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(APP_ZONE)
 
 fun formatShortTime(instant: Instant?): String = instant?.let(shortTimeFormatter::format) ?: "—"
 
@@ -31,7 +40,7 @@ fun timeAgo(instant: Instant?, now: Instant = Instant.now()): String {
 }
 
 /** Mirrors the web frontend's lib/format.ts headerDate: "Dimanche 23 août · 14:32". */
-fun headerDate(instant: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
+fun headerDate(instant: Instant = Instant.now(), zone: ZoneId = APP_ZONE): String {
     val zonedDateTime = instant.atZone(zone)
     val weekday = zonedDateTime.format(DateTimeFormatter.ofPattern("EEEE", Locale.FRENCH))
         .replaceFirstChar { it.uppercase(Locale.FRENCH) }

@@ -36,7 +36,6 @@ import androidx.compose.ui.unit.sp
 import com.pdg.braceletconnecte.presentation.stats.ChartPoint
 import com.pdg.braceletconnecte.presentation.stats.splitByGap
 import java.time.Instant
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle as JavaTextStyle
 import java.util.Locale
@@ -186,7 +185,7 @@ fun DensityLineChartCanvas(
                     strokeWidth = 1.5.dp.toPx(),
                     pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(10f, 10f)),
                 )
-                val label = boundary.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("d MMM", Locale.FRENCH))
+                val label = boundary.atZone(APP_ZONE).format(DateTimeFormatter.ofPattern("d MMM", Locale.FRENCH))
                 val measured = textMeasurer.measure(label, axisLabelStyle)
                 drawText(measured, topLeft = Offset(x - measured.size.width / 2f, topPadPx - measured.size.height - 4.dp.toPx()))
             }
@@ -288,7 +287,7 @@ private fun smoothPath(points: List<Offset>): Path {
 }
 
 private fun buildDayBoundaries(domainStart: Instant, domainEnd: Instant): List<Instant> {
-    val zone = ZoneId.systemDefault()
+    val zone = APP_ZONE
     val boundaries = mutableListOf<Instant>()
     var next = domainStart.atZone(zone).toLocalDate().plusDays(1).atStartOfDay(zone).toInstant()
     while (next.isBefore(domainEnd)) {
@@ -299,7 +298,7 @@ private fun buildDayBoundaries(domainStart: Instant, domainEnd: Instant): List<I
 }
 
 private fun formatXLabel(instant: Instant, spanMs: Long): String {
-    val zone = ZoneId.systemDefault()
+    val zone = APP_ZONE
     return if (spanMs <= 2 * 24 * 60 * 60 * 1000L) {
         instant.atZone(zone).format(DateTimeFormatter.ofPattern("HH:mm"))
     } else {
@@ -308,7 +307,7 @@ private fun formatXLabel(instant: Instant, spanMs: Long): String {
 }
 
 private fun formatTooltipDate(instant: Instant): String {
-    val zone = ZoneId.systemDefault()
+    val zone = APP_ZONE
     val zoned = instant.atZone(zone)
     val weekday = zoned.dayOfWeek.getDisplayName(JavaTextStyle.SHORT, Locale.FRENCH)
     return "$weekday ${zoned.format(DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.FRENCH))}"
