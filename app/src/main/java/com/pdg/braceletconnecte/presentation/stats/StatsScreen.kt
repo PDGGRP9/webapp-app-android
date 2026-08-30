@@ -158,8 +158,10 @@ fun StatsScreen(
                 StatRow(
                     items = listOf(
                         StatRowItem(formatNumber(avg), if (isStepMetric) "Moyenne / jour" else "Moyenne"),
-                        StatRowItem(formatNumber(min), if (isStepMetric) "Jour min" else "Min"),
-                        StatRowItem(formatNumber(max), if (isStepMetric) "Jour max" else "Max"),
+                        StatRowItem(
+                            "${formatNumber(min)} / ${formatNumber(max)}",
+                            if (isStepMetric) "Jour min / max" else "Min / Max",
+                        ),
                         StatRowItem(formatNumber(last), if (isStepMetric) "Aujourd'hui" else "Dernière"),
                     ),
                 )
