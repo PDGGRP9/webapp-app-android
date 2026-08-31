@@ -14,24 +14,55 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.time.Instant
 
 enum class StatsMetric(val label: String) {
     HEART_RATE("BPM"),
     SPO2("SpO2"),
     STEPS("Pas"),
-    SIGNAL("Signal"),
 }
 
+// Only STEPS has a 24h/7j choice now — bpm and spo2 are single-purpose 7-day trend charts (their
+// "right now" values already live on the dashboard). StatsRange is still used to window the raw
+// data table for whichever metric is selected.
 enum class StatsRange(val label: String, val hours: Long) {
     LAST_24H("24h", 24),
     LAST_7D("7j", 24 * 7),
-    LAST_30D("30j", 24 * 30),
 }
+
+private const val MINUTE_MS = 60_000L
+
+/**
+ * - pointBucketMs: bucket size for the red "raw" density curve. Never one point per sample
+ *   (that's a smear at high sampling rates) — bucket-averaged into a density that stays
+ *   readable, Garmin-style.
+ * - averageBucketMs: bucket size for the blue moving-average overlay.
+ * - rawGapMs / averageGapMs: how far apart two consecutive *bucketed* points must be before
+ *   the chart draws a gap instead of a line (i.e. "no data for a while").
+ */
+data class RangeConfig(
+    val pointBucketMs: Long,
+    val averageBucketMs: Long,
+    val rawGapMs: Long,
+    val averageGapMs: Long,
+)
+
+/**
+ * bpm/spo2 are always plotted over the last 7 days now (see [StatsRange] above), so there's only
+ * one line-chart config left. Mirrors the web frontend's `LINE_CHART_CONFIG` in `StatsPage.tsx`.
+ */
+val LINE_CHART_CONFIG = RangeConfig(
+    pointBucketMs = MINUTE_MS,
+    averageBucketMs = 15 * MINUTE_MS,
+    // Older days are only sampled every few minutes, so the raw-gap threshold has to clear that
+    // normal sampling interval — otherwise every routine gap between two samples reads as a
+    // "hole" and the curve turns into isolated dots.
+    rawGapMs = 8 * MINUTE_MS,
+    averageGapMs = 20 * MINUTE_MS,
+)
 
 data class StatsUiState(
     val metric: StatsMetric = StatsMetric.HEART_RATE,
-    val range: StatsRange = StatsRange.LAST_24H,
+    val stepRange: StatsRange = StatsRange.LAST_24H,
     val measurements: List<MeasurementDto> = emptyList(),
     val showRawTable: Boolean = false,
     val isLoading: Boolean = false,
@@ -57,14 +88,14 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectMetric(metric: StatsMetric) = _uiState.update { it.copy(metric = metric) }
-    fun selectRange(range: StatsRange) = _uiState.update { it.copy(range = range) }
+    fun selectStepRange(range: StatsRange) = _uiState.update { it.copy(stepRange = range) }
     fun toggleRawTable() = _uiState.update { it.copy(showRawTable = !it.showRawTable) }
 
     private fun refresh() {
         val userId = (authRepository.authState.value as? AuthState.LoggedIn)?.user?.id ?: return
         _uiState.update { it.copy(isLoading = true) }
         viewModelScope.launch {
-            measurementsRepository.fetchDatas(userId, limit = 500)
+            measurementsRepository.fetchDatas(userId, limit = 5000)
                 .onSuccess { response ->
                     _uiState.update { it.copy(measurements = response.datas, isLoading = false, errorMessage = null) }
                 }
@@ -79,7 +110,4 @@ fun StatsMetric.valueOf(measurement: MeasurementDto): Double? = when (this) {
     StatsMetric.HEART_RATE -> measurement.heartRateBpm?.toDouble()
     StatsMetric.SPO2 -> measurement.spo2Percent
     StatsMetric.STEPS -> measurement.stepCount.toDouble()
-    StatsMetric.SIGNAL -> measurement.signalQuality?.toDouble()
 }
-
-fun StatsRange.cutoff(now: Instant = Instant.now()): Instant = now.minusSeconds(hours * 3600)

@@ -1,175 +1,222 @@
 package com.pdg.braceletconnecte.presentation.stats
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavController
 import com.pdg.braceletconnecte.data.api.dto.capturedAtInstant
+import com.pdg.braceletconnecte.presentation.components.APP_ZONE
+import com.pdg.braceletconnecte.presentation.components.AppButton
+import com.pdg.braceletconnecte.presentation.components.AppButtonVariant
+import com.pdg.braceletconnecte.presentation.components.AppCard
+import com.pdg.braceletconnecte.presentation.components.AppScaffold
+import com.pdg.braceletconnecte.presentation.components.AppSelect
+import com.pdg.braceletconnecte.presentation.components.BarChartCanvas
 import com.pdg.braceletconnecte.presentation.components.DataTable
-import com.pdg.braceletconnecte.presentation.components.LineChartCanvas
-import com.pdg.braceletconnecte.presentation.components.MetricCard
+import com.pdg.braceletconnecte.presentation.components.DensityLineChartCanvas
+import com.pdg.braceletconnecte.presentation.components.SegmentedControl
+import com.pdg.braceletconnecte.presentation.components.SegmentedOption
+import com.pdg.braceletconnecte.presentation.components.StatRow
+import com.pdg.braceletconnecte.presentation.components.StatRowItem
+import com.pdg.braceletconnecte.presentation.components.formatNumber
 import com.pdg.braceletconnecte.presentation.components.formatShortTime
-import java.text.NumberFormat
+import com.pdg.braceletconnecte.presentation.components.headerDate
+import java.time.Instant
+import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle as JavaTextStyle
+import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+private const val DAYS_IN_WEEK = 7
+
 @Composable
 fun StatsScreen(
-    onNavigateBack: () -> Unit,
+    navController: NavController,
     viewModel: StatsViewModel = viewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    var showRawTable by remember { mutableStateOf(false) }
 
-    val cutoff = uiState.range.cutoff()
+    val now = Instant.now()
+    val isStepMetric = uiState.metric == StatsMetric.STEPS
+    // bpm/spo2 have no range toggle any more — they're always the 7-day view.
+    val range = if (isStepMetric) uiState.stepRange else StatsRange.LAST_7D
+    val domainStart = now.minusSeconds(range.hours * 3600)
+
     val filtered = uiState.measurements.mapNotNull { measurement ->
         val instant = measurement.capturedAtInstant() ?: return@mapNotNull null
-        if (instant.isBefore(cutoff)) null else measurement to instant
+        if (instant.isBefore(domainStart)) null else measurement to instant
     }
-    val chartPoints = filtered.mapNotNull { (measurement, instant) ->
+    val rawPairs = filtered.mapNotNull { (measurement, instant) ->
         uiState.metric.valueOf(measurement)?.let { instant to it.toFloat() }
     }
-    val values = chartPoints.map { it.second }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Statistiques") },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
-                    }
-                },
-            )
-        },
-    ) { paddingValues ->
+    // step_count: bar chart of per-period deltas, computed from the *unfiltered* history — the
+    // hourly bucketing needs data before the visible window to seed its running-total baseline.
+    val allStepPairs = uiState.measurements.mapNotNull { measurement ->
+        measurement.capturedAtInstant()?.let { it to measurement.stepCount.toFloat() }
+    }
+    val stepBarData = when {
+        !isStepMetric -> emptyList()
+        range == StatsRange.LAST_24H -> hourlyStepDeltas(allStepPairs, now.toEpochMilli())
+        else -> dailyStepTotals(allStepPairs, DAYS_IN_WEEK, now.toEpochMilli())
+    }
+
+    // heart_rate_bpm/spo2_percent: smoothed 7-day line chart.
+    val chartData = if (isStepMetric) emptyList() else bucketAverage(rawPairs, LINE_CHART_CONFIG.pointBucketMs)
+    val averageData = if (isStepMetric) emptyList() else bucketAverage(rawPairs, LINE_CHART_CONFIG.averageBucketMs)
+
+    // Summary numbers always reflect a fixed 7-day window, independent of which bar-chart range
+    // is selected for steps, so the "Résumé" card never jumps around when 24h/7j is toggled.
+    val summaryDomainStart = now.minusSeconds(StatsRange.LAST_7D.hours * 3600)
+    val summaryPairs = uiState.measurements.mapNotNull { measurement ->
+        val instant = measurement.capturedAtInstant() ?: return@mapNotNull null
+        if (instant.isBefore(summaryDomainStart)) return@mapNotNull null
+        val value = uiState.metric.valueOf(measurement) ?: return@mapNotNull null
+        instant to value.toFloat()
+    }
+    val summaryValues = if (isStepMetric) dailyTotals(summaryPairs) else summaryPairs.map { it.second }
+    val lastPair = summaryPairs.maxByOrNull { it.first }
+    val avg = summaryValues.takeIf { it.isNotEmpty() }?.map { it.toDouble() }?.average()
+    val min = summaryValues.minOrNull()?.toDouble()
+    val max = summaryValues.maxOrNull()?.toDouble()
+    val last = lastPair?.second?.toDouble()
+    val suffix = uiState.metric.suffix()
+
+    AppScaffold(navController = navController) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(paddingValues)
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(padding)
+                .padding(horizontal = 18.4.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(17.6.dp),
         ) {
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                StatsMetric.entries.forEach { metric ->
-                    FilterChip(
-                        selected = uiState.metric == metric,
-                        onClick = { viewModel.selectMetric(metric) },
-                        label = { Text(metric.label) },
+            Column {
+                Text("Historique", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
+                Text(
+                    headerDate(),
+                    fontSize = 12.8.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 3.2.dp),
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(11.2.dp)) {
+                AppSelect(
+                    selected = uiState.metric,
+                    options = StatsMetric.entries,
+                    optionLabel = { it.label },
+                    onSelect = viewModel::selectMetric,
+                )
+                if (isStepMetric) {
+                    SegmentedControl(
+                        options = StatsRange.entries.map { SegmentedOption(it, it.label) },
+                        selected = uiState.stepRange,
+                        onSelect = viewModel::selectStepRange,
                     )
                 }
             }
 
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                StatsRange.entries.forEach { range ->
-                    FilterChip(
-                        selected = uiState.range == range,
-                        onClick = { viewModel.selectRange(range) },
-                        label = { Text(range.label) },
-                    )
-                }
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-            ) {
-                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        "${uiState.metric.label} — ${uiState.range.label}",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    LineChartCanvas(points = chartPoints)
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        MetricCard(label = "Moyenne", value = values.average().let(::formatOrDash), modifier = Modifier.weight(1f))
-                        MetricCard(label = "Min", value = values.minOrNull()?.let(::formatDecimal) ?: "—", modifier = Modifier.weight(1f))
-                        MetricCard(label = "Max", value = values.maxOrNull()?.let(::formatDecimal) ?: "—", modifier = Modifier.weight(1f))
-                        MetricCard(label = "Dernière", value = values.lastOrNull()?.let(::formatDecimal) ?: "—", modifier = Modifier.weight(1f))
-                    }
-                }
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-            ) {
-                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
+            AppCard(title = uiState.metric.label) {
+                if (isStepMetric) {
+                    BarChartCanvas(
+                        data = stepBarData,
+                        valueSuffix = suffix,
+                        formatAxisLabel = { instant -> if (range == StatsRange.LAST_24H) hourAxisLabel(instant) else dayAxisLabel(instant) },
+                        formatTooltipLabel = { instant -> if (range == StatsRange.LAST_24H) hourTooltipLabel(instant) else dayTooltipLabel(instant) },
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text("Données brutes", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                        OutlinedButton(onClick = viewModel::toggleRawTable) {
-                            Text(if (uiState.showRawTable) "Masquer" else "Afficher")
-                        }
-                    }
-                    if (uiState.showRawTable) {
-                        DataTable(
-                            headers = listOf("Heure", "BPM", "SpO2", "Pas"),
-                            rows = filtered.map { (measurement, instant) ->
-                                listOf(
-                                    formatShortTime(instant),
-                                    measurement.heartRateBpm?.toString() ?: "—",
-                                    measurement.spo2Percent?.let(::formatDecimal) ?: "—",
-                                    measurement.stepCount.toString(),
-                                )
-                            },
-                        )
-                    }
+                    )
+                } else {
+                    DensityLineChartCanvas(
+                        data = chartData,
+                        averageData = averageData,
+                        domainStart = domainStart,
+                        domainEnd = now,
+                        gapMs = LINE_CHART_CONFIG.rawGapMs,
+                        averageGapMs = LINE_CHART_CONFIG.averageGapMs,
+                        valueSuffix = suffix,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                StatRow(
+                    items = listOf(
+                        StatRowItem(formatNumber(avg), if (isStepMetric) "Moyenne / jour" else "Moyenne"),
+                        StatRowItem(
+                            "${formatNumber(min)} / ${formatNumber(max)}",
+                            if (isStepMetric) "Jour min / max" else "Min / Max",
+                        ),
+                        StatRowItem(formatNumber(last), if (isStepMetric) "Aujourd'hui" else "Dernière"),
+                    ),
+                    valueFontSize = 15.sp,
+                )
+            }
+
+            AppCard {
+                Text("Données brutes", fontWeight = FontWeight.Bold)
+                AppButton(
+                    text = if (showRawTable) "Masquer le tableau" else "Afficher en tableau",
+                    onClick = { showRawTable = !showRawTable },
+                    variant = AppButtonVariant.Ghost,
+                )
+                if (showRawTable) {
+                    DataTable(
+                        headers = listOf("Heure", "BPM", "SpO2", "Pas"),
+                        rows = filtered.map { (measurement, instant) ->
+                            listOf(
+                                formatShortTime(instant),
+                                measurement.heartRateBpm?.toString() ?: "-",
+                                formatNumber(measurement.spo2Percent, " %"),
+                                measurement.stepCount.toString(),
+                            )
+                        },
+                    )
                 }
             }
 
             uiState.errorMessage?.let { error ->
-                Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                Text(error, color = MaterialTheme.colorScheme.error, fontSize = 12.8.sp)
             }
         }
     }
 }
 
-private fun formatDecimal(value: Float): String {
-    return NumberFormat.getNumberInstance().apply { maximumFractionDigits = 1 }.format(value)
+private fun StatsMetric.suffix(): String = when (this) {
+    StatsMetric.HEART_RATE -> " bpm"
+    StatsMetric.SPO2 -> " %"
+    StatsMetric.STEPS -> ""
 }
 
-private fun formatDecimal(value: Double): String {
-    return NumberFormat.getNumberInstance().apply { maximumFractionDigits = 1 }.format(value)
+private fun hourAxisLabel(instant: Instant): String = "${instant.atZone(APP_ZONE).hour}h"
+
+private fun hourTooltipLabel(instant: Instant): String {
+    val hour = instant.atZone(APP_ZONE).hour
+    return "${hour}h – ${(hour + 1) % 24}h"
 }
 
-private fun formatOrDash(value: Double): String {
-    if (value.isNaN()) return "—"
-    return NumberFormat.getNumberInstance().apply { maximumFractionDigits = 1 }.format(value)
+private fun dayAxisLabel(instant: Instant): String =
+    instant.atZone(APP_ZONE).dayOfWeek.getDisplayName(JavaTextStyle.SHORT, Locale.FRENCH)
+        .replaceFirstChar { it.uppercase(Locale.FRENCH) }
+
+private fun dayTooltipLabel(instant: Instant): String {
+    val zoned = instant.atZone(APP_ZONE)
+    val weekday = zoned.dayOfWeek.getDisplayName(JavaTextStyle.FULL, Locale.FRENCH)
+        .replaceFirstChar { it.uppercase(Locale.FRENCH) }
+    return "$weekday ${zoned.format(DateTimeFormatter.ofPattern("d MMMM", Locale.FRENCH))}"
 }

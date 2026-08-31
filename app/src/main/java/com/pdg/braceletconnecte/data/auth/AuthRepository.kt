@@ -6,8 +6,10 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.pdg.braceletconnecte.data.api.ApiClientProvider
 import com.pdg.braceletconnecte.data.api.AuthTokenHolder
+import com.pdg.braceletconnecte.data.api.dto.CheckEmailRequestDto
 import com.pdg.braceletconnecte.data.api.dto.LoginRequestDto
 import com.pdg.braceletconnecte.data.api.dto.RegisterRequestDto
+import com.pdg.braceletconnecte.data.api.dto.ResetPasswordRequestDto
 import com.pdg.braceletconnecte.data.api.dto.UserDto
 import com.pdg.braceletconnecte.domain.DEFAULT_WEBAPP_BASE_URL
 import kotlinx.coroutines.CoroutineScope
@@ -110,6 +112,18 @@ class AuthRepository(
     suspend fun logout() {
         runCatching { apiClientProvider.getService(_baseUrl.value).logout() }
         clearSession()
+    }
+
+    suspend fun checkEmail(email: String): Result<Unit> = runCatching {
+        apiClientProvider.getService(_baseUrl.value).checkEmail(CheckEmailRequestDto(email = email))
+        Unit
+    }
+
+    suspend fun resetPassword(email: String, password: String, passwordConfirm: String): Result<Unit> = runCatching {
+        apiClientProvider.getService(_baseUrl.value).resetPassword(
+            ResetPasswordRequestDto(email = email, password = password, passwordConfirm = passwordConfirm),
+        )
+        Unit
     }
 
     /** Called by repositories when a request comes back 401 outside of the auth flows above. */

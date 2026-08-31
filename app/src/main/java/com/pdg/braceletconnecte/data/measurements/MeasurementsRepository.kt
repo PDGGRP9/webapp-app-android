@@ -6,6 +6,7 @@ import com.pdg.braceletconnecte.data.api.dto.PostMeasurementRequestDto
 import com.pdg.braceletconnecte.data.api.dto.StatisticsDto
 import com.pdg.braceletconnecte.data.auth.AuthRepository
 import com.pdg.braceletconnecte.domain.BiometricMeasurement
+import okhttp3.ResponseBody
 import retrofit2.HttpException
 
 /** Matches the web frontend's MeasurementsContext poll cadence. */
@@ -40,6 +41,15 @@ class MeasurementsRepository(
                 sourceTopic = "android-ble",
             ),
         )
+        Unit
+    }.onFailure(::handleUnauthorized)
+
+    suspend fun exportData(format: String): Result<ResponseBody> = runCatching {
+        service().exportData(format).body() ?: error("Réponse d'export vide")
+    }.onFailure(::handleUnauthorized)
+
+    suspend fun deleteAllData(): Result<Unit> = runCatching {
+        service().deleteAllData()
         Unit
     }.onFailure(::handleUnauthorized)
 

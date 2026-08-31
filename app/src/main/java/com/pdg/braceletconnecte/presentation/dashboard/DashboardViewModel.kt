@@ -42,7 +42,8 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     init {
         val user = (authRepository.authState.value as? AuthState.LoggedIn)?.user
-        _uiState.update { it.copy(userDisplayName = user?.username.orEmpty()) }
+        val displayName = user?.firstName?.takeIf { it.isNotBlank() } ?: user?.username.orEmpty()
+        _uiState.update { it.copy(userDisplayName = displayName) }
         startPolling()
     }
 
@@ -66,7 +67,10 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             braceletRepository.listBracelets(userId).onSuccess { bracelets ->
                 _uiState.update { it.copy(bracelets = bracelets) }
             }
-            measurementsRepository.fetchDatas(userId).onSuccess { response ->
+            // Bumped from the default 500: the dashboard's rolling 24h step total needs the
+            // same depth of history as the Stats screen to seed its hourly-delta baseline
+            // correctly (matches the web frontend's MeasurementsContext limit of 5000).
+            measurementsRepository.fetchDatas(userId, limit = 5000).onSuccess { response ->
                 _uiState.update { it.copy(recentMeasurements = response.datas) }
             }
             measurementsRepository.fetchStatistics(userId).onSuccess { statistics ->
