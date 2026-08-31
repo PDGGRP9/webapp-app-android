@@ -100,6 +100,14 @@ class BraceletBleClient(
         var deduped = 0
         var packets = 0
 
+        // Sync watchdog: the op queue below only watches a single GATT call, not
+        // the protocol itself. If START is written and no history packet ever
+        // comes back, nothing used to wake the app up — it just waited.
+        var currentState: ConnectionState = ConnectionState.Idle
+        var syncCtrlChar: BluetoothGattCharacteristic? = null
+        var lastHistoryAt = 0L     // 0 = not syncing, nothing to watch
+        var startRetries = 0
+
         // Every GATT operation carries a label: it is what shows up in the status
         // line, so we always know what we are waiting for.
         val ops = ArrayDeque<Pair<String, () -> Unit>>()
@@ -124,6 +132,7 @@ class BraceletBleClient(
         }
 
         fun emitState(state: ConnectionState) {
+            currentState = state
             trySend(BraceletEvent.StateChanged(state))
             logState(state)
         }
@@ -257,6 +266,35 @@ class BraceletBleClient(
             }
         }
 
+        // Protocol watchdog: START written, no history packet coming back. The
+        // bracelet resends its packet on its own after SYNC_ACK_TIMEOUT (5 s), so
+        // we wait longer than that before stepping in, otherwise both sides would
+        // retry at once. Resending START is harmless: the bracelet flushes
+        // nothing that has not been acknowledged.
+        launch {
+            while (isActive) {
+                delay(1_000)
+                if (closing || currentState != ConnectionState.Syncing) continue
+                if (lastHistoryAt == 0L || System.currentTimeMillis() - lastHistoryAt <= SYNC_STALL_MS) continue
+
+                val gatt = currentGatt
+                val ctrl = syncCtrlChar
+                if (gatt == null || ctrl == null) continue
+
+                if (startRetries < MAX_START_RETRIES) {
+                    startRetries++
+                    lastHistoryAt = System.currentTimeMillis()
+                    logW("SYNC", "aucun paquet depuis ${SYNC_STALL_MS}ms -> renvoi de START (essai $startRetries/$MAX_START_RETRIES)")
+                    enqueue("renvoi START") { if (!writeTo(gatt, ctrl, BraceletMeasurementCodec.CMD_START)) opDone() }
+                } else {
+                    logW("SYNC", "toujours rien après $MAX_START_RETRIES renvois de START -> on repart sur une reconnexion")
+                    lastHistoryAt = 0L
+                    startRetries = 0
+                    handleLostLink(BluetoothGatt.GATT_FAILURE)
+                }
+            }
+        }
+
         val gattCallback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 when (newState) {
@@ -343,6 +381,9 @@ class BraceletBleClient(
                     return
                 }
 
+                // Kept for the watchdog and for the STOP sent when the user leaves.
+                syncCtrlChar = syncCtrl
+
                 enqueue("abonnement history") { if (!enableNotifications(gatt, history)) opDone() }
                 enqueue("écriture TIME") {
                     val epoch = Instant.now().epochSecond
@@ -351,6 +392,9 @@ class BraceletBleClient(
                 }
                 enqueue("écriture START") {
                     logI("SYNC", "START -> demande du backlog")
+                    // Arms the watchdog: from here on we expect a history packet.
+                    lastHistoryAt = System.currentTimeMillis()
+                    startRetries = 0
                     emitState(ConnectionState.Syncing)
                     if (!writeTo(gatt, syncCtrl, BraceletMeasurementCodec.CMD_START)) opDone()
                 }
@@ -385,6 +429,10 @@ class BraceletBleClient(
              * here, the bracelet still has its stock and will resend the packet.
              */
             private fun handleHistory(gatt: BluetoothGatt, payload: ByteArray) {
+                // The bracelet is answering: the watchdog restarts from zero, even
+                // for a truncated packet — the link is alive, that is what matters.
+                lastHistoryAt = System.currentTimeMillis()
+                startRetries = 0
                 val id = braceletIdentity ?: return
                 when (val packet = BraceletMeasurementCodec.decodeHistoryPacket(payload)) {
                     is BraceletMeasurementCodec.HistoryPacket.End -> {
@@ -404,7 +452,19 @@ class BraceletBleClient(
                         // live: the screen must say so.
                         emitState(ConnectionState.Syncing)
 
-                        val measurements = packet.records.map { BraceletMeasurementCodec.toMeasurement(id, it) }
+                        // Records taken before the bracelet had the time carry an uptime it
+                        // could not resolve (previous boot cycle): they fall back on the
+                        // reception time. Spacing them by READ_INTERVAL keeps their `ts`
+                        // distinct — otherwise the (deviceUid, ts) key keeps only one of
+                        // them and we would ACK away the rest.
+                        val now = Instant.now()
+                        val measurements = packet.records.mapIndexed { i, record ->
+                            BraceletMeasurementCodec.toMeasurement(
+                                id,
+                                record,
+                                now.minusSeconds(4L * (packet.records.size - 1 - i)),
+                            )
+                        }
                         received += measurements.size
                         measurements.lastOrNull()?.let { trySend(BraceletEvent.MeasurementReceived(it)) }
 
@@ -417,7 +477,7 @@ class BraceletBleClient(
                             deduped += ignored
                             logI(
                                 "SYNC",
-                                "Paquet #$packets reçu (${measurements.size} mesures) -> inséré $inserted / " +
+                                "Paquet #${packet.seq} reçu (${measurements.size} mesures) -> inséré $inserted / " +
                                     "ignoré $ignored (déjà vus) -> ACK",
                             )
                             val syncCtrl = gatt.getService(UUID.fromString(config.serviceUuid))
@@ -426,7 +486,10 @@ class BraceletBleClient(
                                 logW("SYNC", "SYNC_CTRL introuvable : impossible d'acquitter")
                                 return@launch
                             }
-                            enqueue("écriture ACK") { if (!writeTo(gatt, syncCtrl, BraceletMeasurementCodec.CMD_ACK)) opDone() }
+                            // The ACK echoes the packet's sequence number: the bracelet
+                            // refuses any mismatch instead of flushing the wrong batch.
+                            val ack = BraceletMeasurementCodec.ackFor(packet.seq)
+                            enqueue("écriture ACK #${packet.seq}") { if (!writeTo(gatt, syncCtrl, ack)) opDone() }
                         }
                     }
                 }
@@ -570,8 +633,21 @@ class BraceletBleClient(
                 // Same as startScan: stopping on an adapter that is already off
                 // throws, and awaitClose must never let an exception escape.
                 if (scanning) runCatching { scanner.stopScan(scanCallback) }
-                currentGatt?.close()
+                val gatt = currentGatt
                 currentGatt = null
+                val ctrl = syncCtrlChar
+                syncCtrlChar = null
+                if (gatt != null && ctrl != null) {
+                    // Tell the bracelet we are leaving, otherwise it stays in
+                    // WAIT_ACK until its own timeout. The close is delayed a
+                    // little: closing right away would kill the write before the
+                    // Android stack has sent it.
+                    BleLog.i("SYNC", "STOP -> le bracelet peut repasser en idle")
+                    runCatching { writeTo(gatt, ctrl, BraceletMeasurementCodec.CMD_STOP) }
+                    gattHandler.postDelayed({ runCatching { gatt.close() } }, STOP_GRACE_MS)
+                } else {
+                    gatt?.close()
+                }
                 // Log for debugging
                 BleLog.i("BLE", "session fermée (reçu=$received dédup=$deduped paquets=$packets)")
             }
@@ -654,5 +730,17 @@ class BraceletBleClient(
 
         /** Enough to fit a full history packet (2 + 20*8 = 162 B + 3 B of ATT). */
         private const val WANTED_MTU = 247
+
+        /**
+         * Silence after START before we resend it. Longer than the bracelet's own
+         * SYNC_ACK_TIMEOUT (5 s) so its resend gets the first word.
+         */
+        private const val SYNC_STALL_MS = 8_000L
+
+        /** Past this many resends, the link is considered dead: we reconnect. */
+        private const val MAX_START_RETRIES = 3
+
+        /** Time left to the Android stack to send STOP before the GATT is closed. */
+        private const val STOP_GRACE_MS = 200L
     }
 }

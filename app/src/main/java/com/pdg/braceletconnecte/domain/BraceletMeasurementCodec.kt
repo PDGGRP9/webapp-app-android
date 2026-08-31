@@ -14,9 +14,26 @@ object BraceletMeasurementCodec {
     // The firmware now sends the SAME 8-byte record both live and in history. The
     // older decoders below stay in place for firmwares that are not updated yet.
     const val MEASUREMENT_SIZE = 8
-    const val HISTORY_HEADER_SIZE = 2
-    const val HISTORY_TYPE_DATA = 0x01
+
+    /** `[type][count][seqLo][seqHi]`, then the records. */
+    const val HISTORY_HEADER_SIZE = 4
+
+    /**
+     * 0x11, not 0x01: a firmware from before the sequence number used a 2-byte
+     * header. Reading such a packet with this decoder would shift every record
+     * by two bytes and we would ACK garbage. A type we do not know is refused
+     * instead, and shows up in the logs.
+     */
+    const val HISTORY_TYPE_DATA = 0x11
     const val HISTORY_TYPE_END = 0xFF
+
+    /**
+     * Below this, `ts` is not an epoch but the bracelet's uptime in seconds: the
+     * measurement was taken before the app had given it the time. A real epoch is
+     * always above (Sept. 2020), an uptime never reaches it. Same rule on the
+     * firmware side (`src/logic/measurement.h`, TS_EPOCH_MIN).
+     */
+    const val TS_EPOCH_MIN = 1_600_000_000L
 
     /**
      * Ranges accepted as a "real reading". Same bounds as `sanitizeReading()` on
@@ -26,10 +43,21 @@ object BraceletMeasurementCodec {
     val PLAUSIBLE_HR = 1..250
     val PLAUSIBLE_SPO2 = 1..100
 
-    /** Commands written to SYNC_CTRL. */
+    /** Commands written to SYNC_CTRL. START and STOP are a single byte. */
     val CMD_START = byteArrayOf(0x01)
-    val CMD_ACK = byteArrayOf(0x02)
     val CMD_STOP = byteArrayOf(0x03)
+
+    /**
+     * The ACK carries the sequence number of the packet it acknowledges:
+     * `[0x02][seqLo][seqHi]`. Without it a late or duplicated ACK would be taken
+     * for the current packet's and the bracelet would flush measurements we never
+     * received (firmware `reports/diagnostic-sync-ble-2026-08-31.md`).
+     */
+    fun ackFor(seq: Int): ByteArray = byteArrayOf(
+        0x02,
+        (seq and 0xFF).toByte(),
+        ((seq shr 8) and 0xFF).toByte(),
+    )
 
     /** A measurement as it comes out of the bracelet, before interpretation. */
     data class Record(
@@ -41,7 +69,8 @@ object BraceletMeasurementCodec {
 
     /** Result of decoding a HISTORY packet. */
     sealed interface HistoryPacket {
-        data class Data(val records: List<Record>) : HistoryPacket
+        /** `seq` is echoed back in the ACK. */
+        data class Data(val records: List<Record>, val seq: Int) : HistoryPacket
         /** The bracelet has nothing left in stock: we can switch to live. */
         data object End : HistoryPacket
         data class Invalid(val reason: String) : HistoryPacket
@@ -101,8 +130,10 @@ object BraceletMeasurementCodec {
             )
         }
 
+        val seq = (payload[2].toInt() and 0xFF) or ((payload[3].toInt() and 0xFF) shl 8)
         return HistoryPacket.Data(
             (0 until count).map { decodeRecord(payload, HISTORY_HEADER_SIZE + it * MEASUREMENT_SIZE) },
+            seq,
         )
     }
 
@@ -134,7 +165,7 @@ object BraceletMeasurementCodec {
         serialNumber = identity.serialNumber,
         deviceName = identity.deviceName,
         macAddress = identity.macAddress,
-        capturedAt = if (record.ts > 0) Instant.ofEpochSecond(record.ts) else receivedAt,
+        capturedAt = if (record.ts >= TS_EPOCH_MIN) Instant.ofEpochSecond(record.ts) else receivedAt,
         heartRateBpm = record.hr.takeIf { it in PLAUSIBLE_HR },
         spo2Percent = record.spo2.takeIf { it in PLAUSIBLE_SPO2 }?.toDouble(),
         stepCount = record.steps.toLong(),

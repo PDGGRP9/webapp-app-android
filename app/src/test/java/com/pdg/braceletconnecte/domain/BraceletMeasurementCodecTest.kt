@@ -86,30 +86,56 @@ class BraceletMeasurementCodecTest {
 
     @Test
     fun `decodes a full history packet`() {
-        val payload = ByteArray(BraceletMeasurementCodec.HISTORY_HEADER_SIZE + 2 * BraceletMeasurementCodec.MEASUREMENT_SIZE)
+        val header = BraceletMeasurementCodec.HISTORY_HEADER_SIZE
+        val size = BraceletMeasurementCodec.MEASUREMENT_SIZE
+        val payload = ByteArray(header + 2 * size)
         payload[0] = BraceletMeasurementCodec.HISTORY_TYPE_DATA.toByte()
         payload[1] = 2
-        payload[2] = 100; payload[6] = 72; payload[7] = 98      // 1st measurement: ts=100
-        payload[10] = 104; payload[14] = 73; payload[15] = 97   // 2nd measurement: ts=104
+        payload[2] = 0x2A; payload[3] = 0x01                            // seq = 298
+        payload[header] = 100; payload[header + 4] = 72; payload[header + 5] = 98
+        payload[header + size] = 104; payload[header + size + 4] = 73; payload[header + size + 5] = 97
 
         val packet = BraceletMeasurementCodec.decodeHistoryPacket(payload)
 
         assertTrue(packet is BraceletMeasurementCodec.HistoryPacket.Data)
-        val records = (packet as BraceletMeasurementCodec.HistoryPacket.Data).records
-        assertEquals(2, records.size)
-        assertEquals(100L, records[0].ts)
-        assertEquals(72, records[0].hr)
-        assertEquals(104L, records[1].ts)
+        val data = packet as BraceletMeasurementCodec.HistoryPacket.Data
+        assertEquals(2, data.records.size)
+        assertEquals(100L, data.records[0].ts)
+        assertEquals(72, data.records[0].hr)
+        assertEquals(104L, data.records[1].ts)
+        // Little-endian, and it is what the ACK has to echo back.
+        assertEquals(298, data.seq)
     }
 
     @Test
     fun `end packet means the bracelet has nothing left`() {
-        val payload = byteArrayOf(0xFF.toByte(), 0)
+        val payload = byteArrayOf(0xFF.toByte(), 0, 0, 0)
 
         assertEquals(
             BraceletMeasurementCodec.HistoryPacket.End,
             BraceletMeasurementCodec.decodeHistoryPacket(payload),
         )
+    }
+
+    @Test
+    fun `a packet from a firmware without sequence numbers is refused`() {
+        // Old header was 2 bytes and type 0x01. Decoded with the current layout,
+        // every record would be shifted by two bytes and we would ACK garbage.
+        val payload = ByteArray(2 + BraceletMeasurementCodec.MEASUREMENT_SIZE)
+        payload[0] = 0x01
+        payload[1] = 1
+
+        assertTrue(BraceletMeasurementCodec.decodeHistoryPacket(payload) is BraceletMeasurementCodec.HistoryPacket.Invalid)
+    }
+
+    @Test
+    fun `the ack echoes the sequence number little-endian`() {
+        val ack = BraceletMeasurementCodec.ackFor(298)
+
+        assertEquals(3, ack.size)
+        assertEquals(0x02.toByte(), ack[0])
+        assertEquals(0x2A.toByte(), ack[1])
+        assertEquals(0x01.toByte(), ack[2])
     }
 
     @Test
@@ -132,18 +158,33 @@ class BraceletMeasurementCodecTest {
     }
 
     @Test
-    fun `a measurement taken before time sync gets the reception time`() {
-        // ts=0: otherwise all those measurements would share the same timestamp
-        // and deduplication by (deviceUid, ts) would keep only one.
+    fun `a measurement still carrying an uptime gets the reception time`() {
+        // Below TS_EPOCH_MIN, `ts` is the bracelet's uptime, not an epoch: the
+        // firmware could not resolve it (previous boot cycle). Taken as an epoch
+        // it would land in 1970 and the backend would reject it.
         val receivedAt = Instant.ofEpochSecond(1_700_000_000L)
 
         val measurement = BraceletMeasurementCodec.toMeasurement(
             identity,
-            BraceletMeasurementCodec.Record(ts = 0, hr = 70, spo2 = 96, steps = 5),
+            BraceletMeasurementCodec.Record(ts = 420, hr = 70, spo2 = 96, steps = 5),
             receivedAt,
         )
 
         assertEquals(receivedAt, measurement.capturedAt)
+    }
+
+    @Test
+    fun `a resolved epoch is kept as is`() {
+        val receivedAt = Instant.ofEpochSecond(1_700_000_000L)
+        val takenAt = 1_688_000_000L
+
+        val measurement = BraceletMeasurementCodec.toMeasurement(
+            identity,
+            BraceletMeasurementCodec.Record(ts = takenAt, hr = 70, spo2 = 96, steps = 5),
+            receivedAt,
+        )
+
+        assertEquals(Instant.ofEpochSecond(takenAt), measurement.capturedAt)
     }
 
     @Test
