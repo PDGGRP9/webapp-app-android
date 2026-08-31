@@ -19,6 +19,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 class DashboardViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -29,6 +32,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     private val measurementStore = app.measurementStore
 
     private val appConfig = AppConfig.default()
+    private val timestampFormatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault())
 
     // The BLE client writes straight to the database and only acknowledges
     // afterwards: that is the invariant of the protocol (nothing is flushed on
@@ -88,24 +92,14 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /**
-     * Starts the BLE session if it is not already running and the user has not
-     * stopped it by hand. Called when the dashboard opens: the sync must start
-     * as soon as it is possible, without a click.
-     */
-    fun startBleStreamingIfIdle() {
-        if (bleSessionJob?.isActive == true || _uiState.value.stoppedByUser) return
-        startBleStreaming()
-    }
-
     fun startBleStreaming() {
         if (bleSessionJob?.isActive == true) return
 
         _uiState.update {
             it.copy(
-                stoppedByUser = false,
                 connectionState = ConnectionState.Scanning,
                 lastError = null,
+                logLines = prependLog(it.logLines, "Démarrage du flux BLE"),
             )
         }
 
@@ -113,12 +107,21 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             bleClient.observe().collect { event ->
                 when (event) {
                     is BraceletEvent.StateChanged -> {
-                        _uiState.update { current -> current.copy(connectionState = event.state) }
+                        _uiState.update { current ->
+                            current.copy(
+                                connectionState = event.state,
+                                logLines = prependLog(current.logLines, event.state.label),
+                            )
+                        }
                     }
 
                     is BraceletEvent.Error -> {
                         _uiState.update { current ->
-                            current.copy(connectionState = ConnectionState.Error, lastError = event.message)
+                            current.copy(
+                                connectionState = ConnectionState.Error,
+                                lastError = event.message,
+                                logLines = prependLog(current.logLines, event.message),
+                            )
                         }
                         // The session is over (Bluetooth turned off, scan refused...).
                         // We release the job right away, otherwise the "already
@@ -141,8 +144,8 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         bleSessionJob = null
         _uiState.update { current ->
             current.copy(
-                stoppedByUser = true,
                 connectionState = ConnectionState.Stopped,
+                logLines = prependLog(current.logLines, "Flux BLE arrêté"),
             )
         }
     }
@@ -153,6 +156,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                 connectionState = ConnectionState.Connected,
                 latestBleMeasurement = measurement,
                 lastError = null,
+                logLines = prependLog(current.logLines, "Mesure reçue ${formatTimestamp(measurement.capturedAt)}"),
                 pendingPairingCandidate = if (!current.isPaired && !current.pairingPromptDismissed && current.pendingPairingCandidate == null) {
                     measurement
                 } else {
@@ -202,6 +206,13 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     fun logout() {
         viewModelScope.launch { authRepository.logout() }
     }
+
+    private fun prependLog(logLines: List<String>, message: String): List<String> {
+        val line = "${timestampFormatter.format(Instant.now())}  $message"
+        return (listOf(line) + logLines).take(8)
+    }
+
+    private fun formatTimestamp(instant: Instant): String = timestampFormatter.format(instant)
 
     override fun onCleared() {
         super.onCleared()

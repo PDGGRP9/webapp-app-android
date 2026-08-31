@@ -44,6 +44,14 @@ class MeasurementsRepository(
         Unit
     }.onFailure(::handleUnauthorized)
 
+    /**
+     * The detail returned by the backend ("unknown bracelet", "missing field"...).
+     * It is what tells why a measurement is rejected: without it, the app could
+     * only show "pending" without ever giving the cause.
+     */
+    fun errorDetail(throwable: Throwable): String? =
+        (throwable as? HttpException)?.let(apiClientProvider::parseErrorDetail)
+
     suspend fun exportData(format: String): Result<ResponseBody> = runCatching {
         service().exportData(format).body() ?: error("Réponse d'export vide")
     }.onFailure(::handleUnauthorized)
@@ -52,14 +60,6 @@ class MeasurementsRepository(
         service().deleteAllData()
         Unit
     }.onFailure(::handleUnauthorized)
-
-    /**
-     * The detail returned by the backend ("unknown bracelet", "missing field"...).
-     * It is what tells why a measurement is rejected: without it, the app could
-     * only show "pending" without ever giving the cause.
-     */
-    fun errorDetail(throwable: Throwable): String? =
-        (throwable as? HttpException)?.let(apiClientProvider::parseErrorDetail)
 
     private fun service() = apiClientProvider.getService(authRepository.baseUrl.value)
 

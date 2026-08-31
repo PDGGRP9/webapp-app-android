@@ -101,7 +101,13 @@ class MeasurementUploader(
                     val key = "${entity.deviceUid}@${entity.ts}"
                     if (key == lastFailedKey) failStreak++ else { lastFailedKey = key; failStreak = 1 }
 
-                    if (error is HttpException && failStreak >= MAX_ATTEMPTS_PER_MEASUREMENT) {
+                    // A 401 is never the measurement's fault: the token has
+                    // expired. Dropping it would lose data the backend would have
+                    // accepted once logged in again, so it always stays pending.
+                    if (error is HttpException &&
+                        error.code() != 401 &&
+                        failStreak >= MAX_ATTEMPTS_PER_MEASUREMENT
+                    ) {
                         warn(
                             "mesure ts=${entity.ts} en échec $failStreak fois (HTTP ${error.code()} : " +
                                 "${repository.errorDetail(error) ?: "sans détail"}) -> abandonnée",

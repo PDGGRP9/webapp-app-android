@@ -11,6 +11,7 @@ data class DashboardUiState(
     val connectionState: ConnectionState = ConnectionState.Idle,
     val latestBleMeasurement: BiometricMeasurement? = null,
     val lastError: String? = null,
+    val logLines: List<String> = emptyList(),
     val bracelets: List<BraceletDto> = emptyList(),
     val recentMeasurements: List<MeasurementDto> = emptyList(),
     val statistics: StatisticsDto? = null,
@@ -18,8 +19,6 @@ data class DashboardUiState(
     val pairingPromptDismissed: Boolean = false,
     val isPairing: Boolean = false,
     val isRefreshing: Boolean = false,
-    /** The user pressed "Stop": don't restart on our own. */
-    val stoppedByUser: Boolean = false,
 ) {
     val isBleRunning: Boolean
         get() = connectionState == ConnectionState.Scanning ||
