@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -40,7 +39,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.pdg.braceletconnecte.data.api.dto.capturedAtInstant
-import com.pdg.braceletconnecte.domain.BiometricMeasurement
 import com.pdg.braceletconnecte.domain.ConnectionState
 import com.pdg.braceletconnecte.presentation.PermissionScreen
 import com.pdg.braceletconnecte.presentation.components.AppButton
@@ -84,9 +82,14 @@ fun DashboardScreen(
     val heartRate = live?.heartRateBpm ?: last?.heartRateBpm
     val spo2 = live?.spo2Percent ?: last?.spo2Percent
     val lastCapturedAt = live?.capturedAt ?: last?.capturedAtInstant()
-    val braceletLabel = uiState.bracelets.firstOrNull()?.displayName
-        ?: uiState.bracelets.firstOrNull()?.serialNumber
+    // No pairing registry any more: show whichever bracelet is currently
+    // connected over BLE, falling back to the device carried by the last
+    // measurement synced from the backend.
+    val braceletLabel = live?.deviceName
+        ?: last?.bracelet?.displayName
+        ?: last?.bracelet?.serialNumber
         ?: "Aucun bracelet"
+    val braceletActive = (live != null || last?.bracelet != null) && uiState.connectionState != ConnectionState.Error
 
     // step_count only tracks "today so far" (it resets at local midnight), so a true rolling
     // last-24h total is computed separately by summing the hourly deltas.
@@ -123,7 +126,7 @@ fun DashboardScreen(
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    DevicePill(label = braceletLabel, isActive = uiState.isPaired && uiState.connectionState != ConnectionState.Error)
+                    DevicePill(label = braceletLabel, isActive = braceletActive)
                     Avatar(
                         label = initials(uiState.userDisplayName),
                         size = 34.dp,
@@ -202,15 +205,6 @@ fun DashboardScreen(
                 }
             }
         }
-    }
-
-    uiState.pendingPairingCandidate?.let { candidate ->
-        PairingDialog(
-            measurement = candidate,
-            isPairing = uiState.isPairing,
-            onConfirm = viewModel::confirmPairing,
-            onDismiss = viewModel::dismissPairing,
-        )
     }
 }
 
@@ -324,32 +318,6 @@ private fun BleCard(
         }
         TextButton(onClick = onRefresh) { Text("Actualiser les données") }
     }
-}
-
-@Composable
-private fun PairingDialog(
-    measurement: BiometricMeasurement,
-    isPairing: Boolean,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-        title = { Text("Associer ce bracelet ?") },
-        text = {
-            Text(
-                "Associer \"${measurement.deviceName}\" (${measurement.macAddress}) à votre compte ? " +
-                    "Un seul bracelet peut être associé par compte.",
-            )
-        },
-        confirmButton = {
-            AppButton(text = "Associer", onClick = onConfirm, enabled = !isPairing, isLoading = isPairing)
-        },
-        dismissButton = {
-            AppButton(text = "Plus tard", onClick = onDismiss, variant = AppButtonVariant.Ghost, enabled = !isPairing)
-        },
-    )
 }
 
 private fun blePermissions(): List<String> {

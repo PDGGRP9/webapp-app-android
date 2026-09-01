@@ -53,7 +53,7 @@ fun AccountScreen(
         .filter { it.isNotBlank() }
         .joinToString(" ")
         .ifBlank { uiState.user?.username ?: "-" }
-    val bracelet = uiState.bracelets.firstOrNull()
+    val bracelet = uiState.lastDevice
 
     val exportJsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let { viewModel.exportData(it, "json") }
@@ -103,7 +103,7 @@ fun AccountScreen(
                 ) {
                     Column {
                         Text(
-                            bracelet?.displayName ?: bracelet?.serialNumber ?: "Aucun bracelet appairé",
+                            bracelet?.displayName ?: bracelet?.serialNumber ?: "Aucune mesure reçue",
                             fontSize = 14.4.sp,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -115,7 +115,7 @@ fun AccountScreen(
                             )
                         }
                     }
-                    DevicePill(label = if (bracelet != null) "Appairé" else "Aucun", isActive = bracelet != null)
+                    DevicePill(label = if (bracelet != null) "Actif" else "Aucun", isActive = bracelet != null)
                 }
             }
 
@@ -180,7 +180,7 @@ fun AccountScreen(
         ConfirmWordDialog(
             title = "Supprimer toutes mes données",
             message = "Cette action est définitive et irréversible : toutes tes mesures seront effacées. " +
-                "Ton bracelet reste appairé à ton compte. Il n'y a pas de retour en arrière possible.",
+                "Il n'y a pas de retour en arrière possible.",
             confirmWord = "supprimer",
             confirmButtonLabel = "Supprimer définitivement",
             isSubmitting = uiState.isDeleting,

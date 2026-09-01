@@ -4,7 +4,6 @@ import android.app.Application
 import com.pdg.braceletconnecte.data.api.ApiClientProvider
 import com.pdg.braceletconnecte.data.api.AuthTokenHolder
 import com.pdg.braceletconnecte.data.auth.AuthRepository
-import com.pdg.braceletconnecte.data.bracelet.BraceletRepository
 import com.pdg.braceletconnecte.data.local.BraceletDatabase
 import com.pdg.braceletconnecte.data.local.MeasurementStore
 import com.pdg.braceletconnecte.data.measurements.MeasurementUploader
@@ -20,7 +19,6 @@ class BraceletConnecteApplication : Application() {
     private val authTokenHolder = AuthTokenHolder()
     val apiClientProvider by lazy { ApiClientProvider(authTokenHolder) }
     val authRepository by lazy { AuthRepository(this, apiClientProvider, authTokenHolder, applicationScope) }
-    val braceletRepository by lazy { BraceletRepository(apiClientProvider, authRepository) }
     val measurementsRepository by lazy { MeasurementsRepository(apiClientProvider, authRepository) }
 
     // Local measurement database: BLE writes here, the uploader drains it to the

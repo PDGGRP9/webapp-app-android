@@ -1,6 +1,5 @@
 package com.pdg.braceletconnecte.presentation.dashboard
 
-import com.pdg.braceletconnecte.data.api.dto.BraceletDto
 import com.pdg.braceletconnecte.data.api.dto.MeasurementDto
 import com.pdg.braceletconnecte.data.api.dto.StatisticsDto
 import com.pdg.braceletconnecte.domain.BiometricMeasurement
@@ -12,12 +11,8 @@ data class DashboardUiState(
     val latestBleMeasurement: BiometricMeasurement? = null,
     val lastError: String? = null,
     val logLines: List<String> = emptyList(),
-    val bracelets: List<BraceletDto> = emptyList(),
     val recentMeasurements: List<MeasurementDto> = emptyList(),
     val statistics: StatisticsDto? = null,
-    val pendingPairingCandidate: BiometricMeasurement? = null,
-    val pairingPromptDismissed: Boolean = false,
-    val isPairing: Boolean = false,
     val isRefreshing: Boolean = false,
 ) {
     val isBleRunning: Boolean
@@ -28,9 +23,6 @@ data class DashboardUiState(
             connectionState == ConnectionState.Syncing ||
             connectionState == ConnectionState.Live ||
             connectionState == ConnectionState.Reconnecting
-
-    val isPaired: Boolean
-        get() = bracelets.isNotEmpty()
 
     val lastMeasurement: MeasurementDto?
         get() = recentMeasurements.firstOrNull()

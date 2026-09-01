@@ -5,7 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.pdg.braceletconnecte.BraceletConnecteApplication
-import com.pdg.braceletconnecte.data.api.dto.BraceletDto
+import com.pdg.braceletconnecte.data.api.dto.MeasurementBraceletSummaryDto
 import com.pdg.braceletconnecte.data.api.dto.UserDto
 import com.pdg.braceletconnecte.data.auth.AuthState
 import kotlinx.coroutines.Dispatchers
@@ -18,7 +18,10 @@ import kotlinx.coroutines.withContext
 
 data class AccountUiState(
     val user: UserDto? = null,
-    val bracelets: List<BraceletDto> = emptyList(),
+    // No pairing/bracelets registry any more: this is just the device info
+    // carried by the most recent measurement, i.e. "have we ever received a
+    // reading from a bracelet for this account".
+    val lastDevice: MeasurementBraceletSummaryDto? = null,
     val isExporting: Boolean = false,
     val isDeleting: Boolean = false,
     val errorMessage: String? = null,
@@ -29,7 +32,6 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
 
     private val app = application as BraceletConnecteApplication
     private val authRepository = app.authRepository
-    private val braceletRepository = app.braceletRepository
     private val measurementsRepository = app.measurementsRepository
 
     private val _uiState = MutableStateFlow(AccountUiState())
@@ -41,8 +43,8 @@ class AccountViewModel(application: Application) : AndroidViewModel(application)
         val userId = user?.id
         if (userId != null) {
             viewModelScope.launch {
-                braceletRepository.listBracelets(userId).onSuccess { bracelets ->
-                    _uiState.update { it.copy(bracelets = bracelets) }
+                measurementsRepository.fetchDatas(userId, limit = 1).onSuccess { response ->
+                    _uiState.update { it.copy(lastDevice = response.datas.firstOrNull()?.bracelet) }
                 }
             }
         }
