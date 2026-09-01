@@ -2,13 +2,10 @@ package com.pdg.braceletconnecte.data.api
 
 import com.pdg.braceletconnecte.data.api.dto.CheckEmailRequestDto
 import com.pdg.braceletconnecte.data.api.dto.DatasResponseDto
-import com.pdg.braceletconnecte.data.api.dto.ListBraceletsResponseDto
 import com.pdg.braceletconnecte.data.api.dto.LoginRequestDto
 import com.pdg.braceletconnecte.data.api.dto.LoginResponseDto
 import com.pdg.braceletconnecte.data.api.dto.LogoutResponseDto
 import com.pdg.braceletconnecte.data.api.dto.MeResponseDto
-import com.pdg.braceletconnecte.data.api.dto.PairBraceletRequestDto
-import com.pdg.braceletconnecte.data.api.dto.PairBraceletResponseDto
 import com.pdg.braceletconnecte.data.api.dto.PostMeasurementRequestDto
 import com.pdg.braceletconnecte.data.api.dto.PostMeasurementResponseDto
 import com.pdg.braceletconnecte.data.api.dto.RegisterRequestDto
@@ -39,12 +36,8 @@ interface WebappApiService {
     @GET("api/me")
     suspend fun me(): MeResponseDto
 
-    @POST("api/bracelets/pair")
-    suspend fun pairBracelet(@Body body: PairBraceletRequestDto): PairBraceletResponseDto
-
-    @GET("api/bracelets/{userId}")
-    suspend fun listBracelets(@Path("userId") userId: Long): ListBraceletsResponseDto
-
+    // No pairing step: POST /api/datas attaches the measurement to whoever the
+    // Bearer token belongs to (added automatically by AuthInterceptor).
     @POST("api/datas")
     suspend fun postMeasurement(@Body body: PostMeasurementRequestDto): PostMeasurementResponseDto
 

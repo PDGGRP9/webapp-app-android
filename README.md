@@ -34,9 +34,11 @@ Il n'y a plus de dépendance MQTT : la retransmission se fait directement en HTT
   (DataStore Preferences, mêmes clés que le frontend web : `pdg.token` / `pdg.user` /
   `pdg.apiBaseUrl`).
 - Client réseau Retrofit + kotlinx.serialization vers l'API Django (`data/api/`).
-- Pairing bracelet↔compte avec confirmation explicite (`data/bracelet/BraceletRepository.kt`).
+- Pas de pairing/appairage : `POST /api/datas` attache chaque mesure au compte connecté (le
+  Bearer token suffit), et le lien BLE ne parle qu'à un seul bracelet à la fois — rien à
+  appairer ni désappairer, un compte peut recevoir des mesures de bracelets physiques différents.
 - Historique/statistiques avec poll REST toutes les 15s (`data/measurements/MeasurementsRepository.kt`).
-- Écrans Compose : Login, Register, Dashboard (BLE + métriques + pairing), Stats (graphique
+- Écrans Compose : Login, Register, Dashboard (BLE + métriques), Stats (graphique
   Canvas fait main + table), navigation via Navigation-Compose.
 
 ## Ce qu'il faut adapter
@@ -50,6 +52,18 @@ Il n'y a plus de dépendance MQTT : la retransmission se fait directement en HTT
 
 ## Tester sans matériel
 
-`infra-orchestrator/fake-emitter` poste des mesures simulées vers `POST /api/datas` toutes les
-5s (device_uid `11111111-1111-1111-1111-111111111111`) — pratique pour peupler Dashboard/Stats
-sans bracelet physique. Il suffit de pairer ce bracelet de test au compte utilisé.
+Pas de bracelet sous la main : poster une mesure à la main avec le token d'un compte de test.
+
+```sh
+TOKEN=$(curl -s -X POST http://localhost:8000/api/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"ryad@example.com","password":"Demo-1234"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+
+curl -X POST http://localhost:8000/api/datas \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"device_uid":"test-device","serial_number":"TEST-001","heart_rate_bpm":72,"spo2_percent":98,"step_count":100}'
+```
+
+Connecte-toi avec ce même compte (`infra-db/initdb/002-seed.sql`) dans l'app pour voir la mesure
+apparaître dans Dashboard/Stats.

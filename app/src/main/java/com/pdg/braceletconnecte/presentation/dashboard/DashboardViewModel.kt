@@ -27,7 +27,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val app = application as BraceletConnecteApplication
     private val authRepository = app.authRepository
-    private val braceletRepository = app.braceletRepository
     private val measurementsRepository = app.measurementsRepository
     private val measurementStore = app.measurementStore
 
@@ -75,9 +74,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             _uiState.update { it.copy(isRefreshing = true) }
 
-            braceletRepository.listBracelets(userId).onSuccess { bracelets ->
-                _uiState.update { it.copy(bracelets = bracelets) }
-            }
             // Bumped from the default 500: the dashboard's rolling 24h step total needs the
             // same depth of history as the Stats screen to seed its hourly-delta baseline
             // correctly (matches the web frontend's MeasurementsContext limit of 5000).
@@ -157,50 +153,8 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                 latestBleMeasurement = measurement,
                 lastError = null,
                 logLines = prependLog(current.logLines, "Mesure reçue ${formatTimestamp(measurement.capturedAt)}"),
-                pendingPairingCandidate = if (!current.isPaired && !current.pairingPromptDismissed && current.pendingPairingCandidate == null) {
-                    measurement
-                } else {
-                    current.pendingPairingCandidate
-                },
             )
         }
-    }
-
-    fun confirmPairing() {
-        val candidate = _uiState.value.pendingPairingCandidate ?: return
-        val userId = currentUserId() ?: return
-
-        _uiState.update { it.copy(isPairing = true) }
-        viewModelScope.launch {
-            braceletRepository.pair(
-                userId = userId,
-                deviceUid = candidate.deviceUid,
-                serialNumber = candidate.serialNumber,
-                displayName = candidate.deviceName,
-                macAddress = candidate.macAddress,
-            )
-                .onSuccess { bracelet ->
-                    _uiState.update { current ->
-                        current.copy(
-                            isPairing = false,
-                            bracelets = listOf(bracelet),
-                            pendingPairingCandidate = null,
-                        )
-                    }
-                }
-                .onFailure { throwable ->
-                    _uiState.update { current ->
-                        current.copy(
-                            isPairing = false,
-                            lastError = authRepository.errorMessage(throwable),
-                        )
-                    }
-                }
-        }
-    }
-
-    fun dismissPairing() {
-        _uiState.update { it.copy(pendingPairingCandidate = null, pairingPromptDismissed = true) }
     }
 
     fun logout() {

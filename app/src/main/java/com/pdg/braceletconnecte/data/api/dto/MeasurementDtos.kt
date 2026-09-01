@@ -23,7 +23,6 @@ data class PostMeasurementRequestDto(
 
 @Serializable
 data class PostMeasurementResponseDto(
-    val bracelet: BraceletDto,
     val measurement: MeasurementDto,
 )
 
@@ -37,7 +36,6 @@ data class MeasurementBraceletSummaryDto(
 @Serializable
 data class MeasurementDto(
     val id: Long,
-    @SerialName("bracelet_id") val braceletId: Long? = null,
     @SerialName("captured_at") val capturedAt: String,
     @SerialName("heart_rate_bpm") val heartRateBpm: Int? = null,
     @SerialName("spo2_percent") val spo2Percent: Double? = null,
