@@ -24,7 +24,10 @@ data class DashboardUiState(
         get() = connectionState == ConnectionState.Scanning ||
             connectionState == ConnectionState.Connecting ||
             connectionState == ConnectionState.Connected ||
-            connectionState == ConnectionState.Publishing
+            connectionState == ConnectionState.Publishing ||
+            connectionState == ConnectionState.Syncing ||
+            connectionState == ConnectionState.Live ||
+            connectionState == ConnectionState.Reconnecting
 
     val isPaired: Boolean
         get() = bracelets.isNotEmpty()

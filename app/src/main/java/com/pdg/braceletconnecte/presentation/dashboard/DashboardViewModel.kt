@@ -29,10 +29,21 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     private val authRepository = app.authRepository
     private val braceletRepository = app.braceletRepository
     private val measurementsRepository = app.measurementsRepository
+    private val measurementStore = app.measurementStore
 
     private val appConfig = AppConfig.default()
-    private val bleClient = BraceletBleClient(application, appConfig.bracelet)
     private val timestampFormatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault())
+
+    // The BLE client writes straight to the database and only acknowledges
+    // afterwards: that is the invariant of the protocol (nothing is flushed on
+    // the bracelet before the ACK). Sending to the backend is the
+    // MeasurementUploader's job, not BLE's.
+    private val bleClient = BraceletBleClient(application, appConfig.bracelet) { measurements ->
+        // Write first (that write is what allows the ACK on the BLE side), then
+        // wake the uploader: both live data and catch-up go out to the backend
+        // right away, without waiting for its 5 s tick.
+        measurementStore.save(measurements).also { app.uploader.nudge() }
+    }
 
     private val _uiState = MutableStateFlow(DashboardUiState())
     val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
@@ -96,16 +107,28 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             bleClient.observe().collect { event ->
                 when (event) {
                     is BraceletEvent.StateChanged -> {
-                        _uiState.update { current -> current.copy(connectionState = event.state) }
+                        _uiState.update { current ->
+                            current.copy(
+                                connectionState = event.state,
+                                logLines = prependLog(current.logLines, event.state.label),
+                            )
+                        }
                     }
-
-                    is BraceletEvent.Log -> appendLog(event.message)
 
                     is BraceletEvent.Error -> {
                         _uiState.update { current ->
-                            current.copy(connectionState = ConnectionState.Error, lastError = event.message)
+                            current.copy(
+                                connectionState = ConnectionState.Error,
+                                lastError = event.message,
+                                logLines = prependLog(current.logLines, event.message),
+                            )
                         }
-                        appendLog(event.message)
+                        // The session is over (Bluetooth turned off, scan refused...).
+                        // We release the job right away, otherwise the "already
+                        // running" guard would turn the "Démarrer" button into a
+                        // no-op.
+                        bleSessionJob?.cancel()
+                        bleSessionJob = null
                     }
 
                     is BraceletEvent.MeasurementReceived -> {
@@ -140,32 +163,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                     current.pendingPairingCandidate
                 },
             )
-        }
-        retransmitMeasurement(measurement)
-    }
-
-    private fun retransmitMeasurement(measurement: BiometricMeasurement) {
-        _uiState.update { it.copy(connectionState = ConnectionState.Publishing) }
-        viewModelScope.launch {
-            measurementsRepository.postMeasurement(measurement)
-                .onSuccess {
-                    _uiState.update { current ->
-                        current.copy(
-                            connectionState = ConnectionState.Connected,
-                            logLines = prependLog(current.logLines, "Mesure transmise au backend"),
-                        )
-                    }
-                }
-                .onFailure { throwable ->
-                    val message = authRepository.errorMessage(throwable)
-                    _uiState.update { current ->
-                        current.copy(
-                            connectionState = ConnectionState.Connected,
-                            lastError = message,
-                            logLines = prependLog(current.logLines, "Échec de transmission: $message"),
-                        )
-                    }
-                }
         }
     }
 
@@ -208,10 +205,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun logout() {
         viewModelScope.launch { authRepository.logout() }
-    }
-
-    private fun appendLog(message: String) {
-        _uiState.update { current -> current.copy(logLines = prependLog(current.logLines, message)) }
     }
 
     private fun prependLog(logLines: List<String>, message: String): List<String> {
