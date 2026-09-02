@@ -1,16 +1,21 @@
 package com.pdg.braceletconnecte.presentation.login
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,6 +44,7 @@ fun LoginScreen(
     onNavigateToRegister: () -> Unit,
     onNavigateToForgotPassword: () -> Unit,
     onLoggedIn: () -> Unit,
+    onContinueAsGuest: () -> Unit,
     viewModel: LoginViewModel = viewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -122,6 +128,21 @@ fun LoginScreen(
                 isLoading = uiState.isSubmitting,
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            OutlinedButton(
+                onClick = { viewModel.continueAsGuest(onContinueAsGuest) },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(50),
+                border = BorderStroke(1.5.dp, AppColors.Ink),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.Ink),
+                contentPadding = PaddingValues(vertical = 13.6.dp),
+            ) {
+                Text(
+                    "Ignorer et voir les données en direct",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),

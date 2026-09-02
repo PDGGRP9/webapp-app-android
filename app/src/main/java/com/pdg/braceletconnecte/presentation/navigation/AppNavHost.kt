@@ -20,6 +20,7 @@ import com.pdg.braceletconnecte.data.auth.AuthState
 import com.pdg.braceletconnecte.presentation.account.AccountScreen
 import com.pdg.braceletconnecte.presentation.dashboard.DashboardScreen
 import com.pdg.braceletconnecte.presentation.forgotpassword.ForgotPasswordScreen
+import com.pdg.braceletconnecte.presentation.login.LoginRequiredScreen
 import com.pdg.braceletconnecte.presentation.login.LoginScreen
 import com.pdg.braceletconnecte.presentation.register.RegisterScreen
 import com.pdg.braceletconnecte.presentation.stats.StatsScreen
@@ -43,16 +44,25 @@ fun AppNavHost(application: BraceletConnecteApplication) {
     }
 
     val navController = rememberNavController()
-    val startDestination = if (authState is AuthState.LoggedIn) AppRoutes.DASHBOARD else AppRoutes.LOGIN
+    // Guest ("Ignorer") lands on Direct just like a logged-in user; only Login stays gated off.
+    val startDestination =
+        if (authState is AuthState.LoggedIn || authState is AuthState.Guest) AppRoutes.DASHBOARD else AppRoutes.LOGIN
 
     NavHost(navController = navController, startDestination = startDestination) {
         composable(AppRoutes.LOGIN) {
             LoginScreen(
                 onNavigateToRegister = { navController.navigate(AppRoutes.REGISTER) },
                 onNavigateToForgotPassword = { navController.navigate(AppRoutes.FORGOT_PASSWORD) },
+                // popUpTo(0): Login can now sit mid-stack (a guest tapping "Se connecter" from
+                // a gated tab), so clear the whole back stack rather than just up to LOGIN.
                 onLoggedIn = {
                     navController.navigate(AppRoutes.DASHBOARD) {
-                        popUpTo(AppRoutes.LOGIN) { inclusive = true }
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+                onContinueAsGuest = {
+                    navController.navigate(AppRoutes.DASHBOARD) {
+                        popUpTo(0) { inclusive = true }
                     }
                 },
             )
@@ -62,7 +72,7 @@ fun AppNavHost(application: BraceletConnecteApplication) {
                 onNavigateToLogin = { navController.popBackStack() },
                 onRegistered = {
                     navController.navigate(AppRoutes.DASHBOARD) {
-                        popUpTo(AppRoutes.LOGIN) { inclusive = true }
+                        popUpTo(0) { inclusive = true }
                     }
                 },
             )
@@ -74,10 +84,18 @@ fun AppNavHost(application: BraceletConnecteApplication) {
             DashboardScreen(navController = navController)
         }
         composable(AppRoutes.STATS) {
-            StatsScreen(navController = navController)
+            if (authState is AuthState.LoggedIn) {
+                StatsScreen(navController = navController)
+            } else {
+                LoginRequiredScreen(navController = navController, feature = "ton historique")
+            }
         }
         composable(AppRoutes.ACCOUNT) {
-            AccountScreen(navController = navController)
+            if (authState is AuthState.LoggedIn) {
+                AccountScreen(navController = navController)
+            } else {
+                LoginRequiredScreen(navController = navController, feature = "ton compte")
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 package com.pdg.braceletconnecte.data.auth
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -54,7 +55,8 @@ class AuthRepository(
         val storedToken = prefs[TOKEN_KEY]
         val storedUserJson = prefs[USER_KEY]
         if (storedToken.isNullOrBlank() || storedUserJson.isNullOrBlank()) {
-            _authState.value = AuthState.LoggedOut
+            // "Ignorer" was chosen on a previous run: land straight on Direct, no login.
+            _authState.value = if (prefs[GUEST_KEY] == true) AuthState.Guest else AuthState.LoggedOut
             return
         }
 
@@ -82,6 +84,13 @@ class AuthRepository(
         if (trimmed.isBlank()) return
         _baseUrl.value = trimmed
         context.authDataStore.edit { it[BASE_URL_KEY] = trimmed }
+    }
+
+    /** "Ignorer": no account, but the live BLE tab (Direct) becomes usable. Persisted so the
+     *  next launch skips the login screen; cleared by a real login or an explicit logout. */
+    suspend fun continueAsGuest() {
+        context.authDataStore.edit { it[GUEST_KEY] = true }
+        _authState.value = AuthState.Guest
     }
 
     suspend fun login(email: String, password: String): Result<Unit> = runCatching {
@@ -148,6 +157,7 @@ class AuthRepository(
             prefs[TOKEN_KEY] = token
             prefs[USER_KEY] = json.encodeToString(UserDto.serializer(), user)
             prefs[BASE_URL_KEY] = baseUrl
+            prefs.remove(GUEST_KEY)
         }
         _authState.value = AuthState.LoggedIn(user, token)
     }
@@ -157,6 +167,7 @@ class AuthRepository(
         context.authDataStore.edit { prefs ->
             prefs.remove(TOKEN_KEY)
             prefs.remove(USER_KEY)
+            prefs.remove(GUEST_KEY)
         }
         _authState.value = AuthState.LoggedOut
     }
@@ -168,5 +179,6 @@ class AuthRepository(
         private val TOKEN_KEY = stringPreferencesKey("pdg.token")
         private val USER_KEY = stringPreferencesKey("pdg.user")
         private val BASE_URL_KEY = stringPreferencesKey("pdg.apiBaseUrl")
+        private val GUEST_KEY = booleanPreferencesKey("pdg.guest")
     }
 }

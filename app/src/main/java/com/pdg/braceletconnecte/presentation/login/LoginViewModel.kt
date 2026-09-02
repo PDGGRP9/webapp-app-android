@@ -29,6 +29,15 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
     fun onPasswordChange(value: String) = _uiState.update { it.copy(password = value, errorMessage = null) }
     fun onBaseUrlChange(value: String) = _uiState.update { it.copy(baseUrl = value, errorMessage = null) }
 
+    /** "Ignorer": keep any backend URL typed, then enter guest mode (Direct tab only). */
+    fun continueAsGuest(onDone: () -> Unit) {
+        viewModelScope.launch {
+            authRepository.setBaseUrl(_uiState.value.baseUrl)
+            authRepository.continueAsGuest()
+            onDone()
+        }
+    }
+
     fun submit(onSuccess: () -> Unit) {
         val state = _uiState.value
         if (state.email.isBlank() || state.password.isBlank()) {
