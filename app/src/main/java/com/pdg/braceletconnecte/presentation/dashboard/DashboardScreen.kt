@@ -60,6 +60,8 @@ import com.pdg.braceletconnecte.presentation.components.headerDate
 import com.pdg.braceletconnecte.presentation.components.initials
 import com.pdg.braceletconnecte.presentation.components.timeAgo
 import com.pdg.braceletconnecte.presentation.navigation.AppRoutes
+import java.time.LocalDate
+import java.time.ZoneId
 
 @Composable
 fun DashboardScreen(
@@ -90,9 +92,18 @@ fun DashboardScreen(
         ?: "Aucun bracelet"
     val braceletActive = (live != null || last?.bracelet != null) && uiState.connectionState != ConnectionState.Error
 
-    // The bracelet is the only step counter: it sends the day's running total (reset to 0 at
-    // local midnight on the firmware side). We just show that value — nothing is re-derived here.
-    val stepsToday = (live?.stepCount ?: last?.stepCount)?.toDouble()
+    // The bracelet is the only step counter: it sends the day's running total (the firmware
+    // resets it at local midnight). But if the last reading we have predates *today* (phone
+    // local midnight) — bracelet off overnight, not connected yet — that total is stale, so we
+    // show 0 until a fresh reading arrives and patches it back to the real value.
+    val phoneMidnight = LocalDate.now(ZoneId.systemDefault()).atStartOfDay(ZoneId.systemDefault()).toInstant()
+    val latestStepInstant = live?.capturedAt ?: last?.capturedAtInstant()
+    val latestStepCount = live?.stepCount ?: last?.stepCount
+    val stepsToday = when {
+        latestStepCount == null -> null
+        latestStepInstant == null || latestStepInstant.isBefore(phoneMidnight) -> 0.0
+        else -> latestStepCount.toDouble()
+    }
 
     AppScaffold(navController = navController) { padding ->
         Column(
