@@ -39,6 +39,7 @@ fun LoginScreen(
     onNavigateToRegister: () -> Unit,
     onNavigateToForgotPassword: () -> Unit,
     onLoggedIn: () -> Unit,
+    onContinueAsGuest: () -> Unit,
     viewModel: LoginViewModel = viewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -122,6 +123,18 @@ fun LoginScreen(
                 isLoading = uiState.isSubmitting,
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            TextButton(
+                onClick = { viewModel.continueAsGuest(onContinueAsGuest) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    "Ignorer et voir les données en direct",
+                    color = AppColors.InkSoft,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
