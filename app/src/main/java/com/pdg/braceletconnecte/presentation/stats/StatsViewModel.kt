@@ -35,15 +35,21 @@ private const val MINUTE_MS = 60_000L
  * - pointBucketMs: bucket size for the red "raw" density curve. Never one point per sample
  *   (that's a smear at high sampling rates) — bucket-averaged into a density that stays
  *   readable, Garmin-style.
- * - averageBucketMs: bucket size for the blue moving-average overlay.
- * - rawGapMs / averageGapMs: how far apart two consecutive *bucketed* points must be before
- *   the chart draws a gap instead of a line (i.e. "no data for a while").
+ * - averageWindowMs / averageStepMs: the blue overlay is a sliding-window mean (see
+ *   [movingAverage]) — every averageStepMs it averages all raw samples within
+ *   ±averageWindowMs/2, so it stays a smooth dense curve even when the data is bursty.
+ * - rawGapMs / averageGapMs: how far apart two consecutive points must be before the chart
+ *   draws a gap instead of a line (i.e. "no data for a while").
+ * - pxPerMinute: keeps the 7-day canvas to a few screen-widths of horizontal scroll (the
+ *   date header above the chart tracks the left edge as you scroll).
  */
 data class RangeConfig(
     val pointBucketMs: Long,
-    val averageBucketMs: Long,
+    val averageWindowMs: Long,
+    val averageStepMs: Long,
     val rawGapMs: Long,
     val averageGapMs: Long,
+    val pxPerMinute: Float,
 )
 
 /**
@@ -52,12 +58,14 @@ data class RangeConfig(
  */
 val LINE_CHART_CONFIG = RangeConfig(
     pointBucketMs = MINUTE_MS,
-    averageBucketMs = 15 * MINUTE_MS,
+    averageWindowMs = 30 * MINUTE_MS,
+    averageStepMs = 5 * MINUTE_MS,
     // Older days are only sampled every few minutes, so the raw-gap threshold has to clear that
     // normal sampling interval — otherwise every routine gap between two samples reads as a
     // "hole" and the curve turns into isolated dots.
     rawGapMs = 8 * MINUTE_MS,
     averageGapMs = 20 * MINUTE_MS,
+    pxPerMinute = 0.7f,
 )
 
 data class StatsUiState(

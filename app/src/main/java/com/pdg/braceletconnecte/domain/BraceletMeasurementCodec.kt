@@ -146,6 +146,18 @@ object BraceletMeasurementCodec {
     )
 
     /**
+     * TIME characteristic payload: 4-byte UTC epoch followed by the local UTC offset in
+     * seconds (int32 LE). The bracelet needs the offset to reset its daily step counter at
+     * *local* midnight. Old firmware that only reads the first 4 bytes still gets the epoch.
+     */
+    fun encodeTime(epochSeconds: Long, utcOffsetSeconds: Int): ByteArray = encodeEpoch(epochSeconds) + byteArrayOf(
+        (utcOffsetSeconds and 0xFF).toByte(),
+        ((utcOffsetSeconds shr 8) and 0xFF).toByte(),
+        ((utcOffsetSeconds shr 16) and 0xFF).toByte(),
+        ((utcOffsetSeconds shr 24) and 0xFF).toByte(),
+    )
+
+    /**
      * The same rules as for the 4-byte decoder below:
      *  - `ts = 0` = the bracelet had not received the time yet. We give it the
      *    reception time, otherwise all those measurements would share the same

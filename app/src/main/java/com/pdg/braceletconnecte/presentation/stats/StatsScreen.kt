@@ -80,7 +80,11 @@ fun StatsScreen(
 
     // heart_rate_bpm/spo2_percent: smoothed 7-day line chart.
     val chartData = if (isStepMetric) emptyList() else bucketAverage(rawPairs, LINE_CHART_CONFIG.pointBucketMs)
-    val averageData = if (isStepMetric) emptyList() else bucketAverage(rawPairs, LINE_CHART_CONFIG.averageBucketMs)
+    val averageData = if (isStepMetric) {
+        emptyList()
+    } else {
+        movingAverage(rawPairs, LINE_CHART_CONFIG.averageWindowMs, LINE_CHART_CONFIG.averageStepMs)
+    }
 
     // Summary numbers always reflect a fixed 7-day window, independent of which bar-chart range
     // is selected for steps, so the "Résumé" card never jumps around when 24h/7j is toggled.
@@ -151,6 +155,7 @@ fun StatsScreen(
                         domainEnd = now,
                         gapMs = LINE_CHART_CONFIG.rawGapMs,
                         averageGapMs = LINE_CHART_CONFIG.averageGapMs,
+                        pxPerMinute = LINE_CHART_CONFIG.pxPerMinute,
                         valueSuffix = suffix,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -191,7 +196,7 @@ fun StatsScreen(
             }
 
             uiState.errorMessage?.let { error ->
-                Text(error, color = MaterialTheme.colorScheme.error, fontSize = 12.8.sp)
+                Text(error, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.8.sp)
             }
         }
     }

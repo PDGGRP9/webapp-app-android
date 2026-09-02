@@ -76,4 +76,46 @@ class StatsMathTest {
             buckets,
         )
     }
+
+    private val MINUTE_MS = 60_000L
+
+    @Test
+    fun `movingAverage averages every sample in the window, not just the endpoints`() {
+        val base = Instant.parse("2026-01-01T12:00:00Z")
+        // 60, 90, 90, 90, 140 one minute apart -> mean 94, within a single 30-min window.
+        val points = listOf(60f, 90f, 90f, 90f, 140f).mapIndexed { i, v ->
+            base.plusSeconds(i * 60L) to v
+        }
+
+        val series = movingAverage(points, windowMs = 30 * MINUTE_MS, stepMs = 5 * MINUTE_MS)
+
+        assertTrue(series.isNotEmpty())
+        series.forEach { assertEquals(94f, it.value, 0.01f) }
+    }
+
+    @Test
+    fun `movingAverage stays a dense curve from a short burst`() {
+        val base = Instant.parse("2026-01-01T12:00:00Z")
+        val points = listOf(0L, 2L, 4L, 6L).map { base.plusSeconds(it * 60) to 70f }
+
+        val series = movingAverage(points, windowMs = 30 * MINUTE_MS, stepMs = 5 * MINUTE_MS)
+
+        assertTrue("expected >= 2 points, got ${series.size}", series.size >= 2)
+    }
+
+    @Test
+    fun `movingAverage leaves a gap wider than the window empty`() {
+        val base = Instant.parse("2026-01-01T12:00:00Z")
+        val points = listOf(0L, 2L, 120L, 122L).map { base.plusSeconds(it * 60) to 80f }
+
+        val series = movingAverage(points, windowMs = 30 * MINUTE_MS, stepMs = 5 * MINUTE_MS)
+        val maxGap = series.zipWithNext { a, b -> b.instant.toEpochMilli() - a.instant.toEpochMilli() }.max()
+
+        assertTrue("expected a >30-min hole in the resampled series", maxGap > 30 * MINUTE_MS)
+    }
+
+    @Test
+    fun `movingAverage returns empty for no samples`() {
+        assertEquals(emptyList<ChartPoint>(), movingAverage(emptyList(), 30 * MINUTE_MS, 5 * MINUTE_MS))
+    }
 }

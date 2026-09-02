@@ -158,6 +158,31 @@ class BraceletMeasurementCodecTest {
     }
 
     @Test
+    fun `encodeTime appends the utc offset as a little-endian int32`() {
+        val bytes = BraceletMeasurementCodec.encodeTime(0x11223344L, 7200) // +02:00
+
+        assertEquals(8, bytes.size)
+        // First 4 bytes are exactly the epoch encoding (old firmware reads only these).
+        assertEquals(0x44.toByte(), bytes[0])
+        assertEquals(0x11.toByte(), bytes[3])
+        // 7200 = 0x00001C20 little-endian.
+        assertEquals(0x20.toByte(), bytes[4])
+        assertEquals(0x1C.toByte(), bytes[5])
+        assertEquals(0x00.toByte(), bytes[6])
+        assertEquals(0x00.toByte(), bytes[7])
+    }
+
+    @Test
+    fun `encodeTime encodes a negative offset (west of UTC) in two's complement`() {
+        val bytes = BraceletMeasurementCodec.encodeTime(0L, -3600)
+        // -3600 = 0xFFFFF1F0
+        assertEquals(0xF0.toByte(), bytes[4])
+        assertEquals(0xF1.toByte(), bytes[5])
+        assertEquals(0xFF.toByte(), bytes[6])
+        assertEquals(0xFF.toByte(), bytes[7])
+    }
+
+    @Test
     fun `a measurement still carrying an uptime gets the reception time`() {
         // Below TS_EPOCH_MIN, `ts` is the bracelet's uptime, not an epoch: the
         // firmware could not resolve it (previous boot cycle). Taken as an epoch

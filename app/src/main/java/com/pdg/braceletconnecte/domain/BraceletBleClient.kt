@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.Instant
+import java.time.ZoneId
 import java.util.ArrayDeque
 import java.util.UUID
 
@@ -387,9 +388,13 @@ class BraceletBleClient(
 
                 enqueue("abonnement history") { if (!enableNotifications(gatt, history)) opDone() }
                 enqueue("écriture TIME") {
-                    val epoch = Instant.now().epochSecond
-                    logI("SYNC", "envoi de l'heure au bracelet (epoch=$epoch)")
-                    if (!writeTo(gatt, time, BraceletMeasurementCodec.encodeEpoch(epoch))) opDone()
+                    val now = Instant.now()
+                    val epoch = now.epochSecond
+                    // The bracelet resets its daily step counter at local midnight, so it needs
+                    // the local UTC offset (DST included) alongside the epoch.
+                    val offset = APP_TIME_ZONE.rules.getOffset(now).totalSeconds
+                    logI("SYNC", "envoi de l'heure au bracelet (epoch=$epoch, offset=${offset}s)")
+                    if (!writeTo(gatt, time, BraceletMeasurementCodec.encodeTime(epoch, offset))) opDone()
                 }
                 enqueue("écriture START") {
                     logI("SYNC", "START -> demande du backlog")
@@ -721,6 +726,10 @@ class BraceletBleClient(
     }
 
     companion object {
+        /** The fleet is pinned to Switzerland (see the backend seed data); the bracelet's daily
+         *  step reset must line up with the same local midnight the app/frontend bucket by. */
+        private val APP_TIME_ZONE: ZoneId = ZoneId.of("Europe/Zurich")
+
         private val CLIENT_CHARACTERISTIC_CONFIG: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         /** Past this, the GATT answer is considered lost and the queue is restarted. */

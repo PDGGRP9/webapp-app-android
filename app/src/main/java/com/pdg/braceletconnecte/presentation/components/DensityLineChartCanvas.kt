@@ -4,8 +4,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
@@ -44,7 +46,7 @@ import kotlin.math.roundToInt
 
 private val AVERAGE_LINE_COLOR = Color(0xFF3B82F6)
 private const val MINUTE_MS = 60_000L
-private const val DEFAULT_PX_PER_MINUTE = 6f
+private const val DEFAULT_PX_PER_MINUTE = 0.7f
 private val CHART_HEIGHT = 240.dp
 private val LEFT_PAD = 44.dp
 private val RIGHT_PAD = 44.dp
@@ -141,7 +143,21 @@ fun DensityLineChartCanvas(
     val textMeasurer = rememberTextMeasurer()
     val xLabelCount = (plotWidthPx / with(density) { 160.dp.toPx() }).roundToInt().coerceAtLeast(2)
 
-    Box(modifier = modifier.fillMaxWidth().horizontalScroll(scrollState)) {
+    // Day of the left-most visible instant. The x-axis only shows hours, so this header is
+    // what tells you which day you're looking at; it follows the horizontal scroll.
+    val spanMs = domainEndMs - domainStartMs
+    val leftEdgeMs = remember(scrollState.value, scrollState.maxValue, domainStartMs, domainEndMs) {
+        val ratio = if (scrollState.maxValue > 0) scrollState.value.toFloat() / scrollState.maxValue else 0f
+        domainStartMs + (ratio * spanMs).toLong()
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = formatDateHeader(Instant.ofEpochMilli(leftEdgeMs)),
+            style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant),
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        Box(modifier = Modifier.fillMaxWidth().horizontalScroll(scrollState)) {
         Canvas(
             modifier = Modifier
                 .size(totalWidthDp.dp, CHART_HEIGHT)
@@ -170,7 +186,7 @@ fun DensityLineChartCanvas(
             for (i in 0..xLabelCount) {
                 val t = domainStartMs + (i.toFloat() / xLabelCount) * (domainEndMs - domainStartMs)
                 val x = xOf(t.toLong())
-                val label = formatXLabel(Instant.ofEpochMilli(t.toLong()), domainEndMs - domainStartMs)
+                val label = formatXLabel(Instant.ofEpochMilli(t.toLong()))
                 val measured = textMeasurer.measure(label, axisLabelStyle)
                 drawText(measured, topLeft = Offset(x - measured.size.width / 2f, baselineY + 12.dp.toPx()))
             }
@@ -259,6 +275,7 @@ fun DensityLineChartCanvas(
                 drawText(measuredDate, topLeft = Offset(tooltipX + 12.dp.toPx(), topPadPx + 8.dp.toPx() + measuredValue.size.height + 2.dp.toPx()))
             }
         }
+        }
     }
 }
 
@@ -297,13 +314,16 @@ private fun buildDayBoundaries(domainStart: Instant, domainEnd: Instant): List<I
     return boundaries
 }
 
-private fun formatXLabel(instant: Instant, spanMs: Long): String {
-    val zone = APP_ZONE
-    return if (spanMs <= 2 * 24 * 60 * 60 * 1000L) {
-        instant.atZone(zone).format(DateTimeFormatter.ofPattern("HH:mm"))
-    } else {
-        instant.atZone(zone).format(DateTimeFormatter.ofPattern("d MMM", Locale.FRENCH))
-    }
+// Hour-only labels, whatever the span: the day is carried by the scrolling date header above.
+private fun formatXLabel(instant: Instant): String =
+    instant.atZone(APP_ZONE).format(DateTimeFormatter.ofPattern("HH:mm"))
+
+/** "Mercredi 2 septembre 2026" in APP_ZONE — the scrolling date header above the chart. */
+private fun formatDateHeader(instant: Instant): String {
+    val zoned = instant.atZone(APP_ZONE)
+    val weekday = zoned.dayOfWeek.getDisplayName(JavaTextStyle.FULL, Locale.FRENCH)
+        .replaceFirstChar { it.uppercase(Locale.FRENCH) }
+    return "$weekday ${zoned.format(DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.FRENCH))}"
 }
 
 private fun formatTooltipDate(instant: Instant): String {
