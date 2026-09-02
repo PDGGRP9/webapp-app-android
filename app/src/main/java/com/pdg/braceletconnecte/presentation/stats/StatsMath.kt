@@ -27,6 +27,44 @@ fun bucketAverage(points: List<Pair<Instant, Float>>, bucketMs: Long): List<Char
 }
 
 /**
+ * Resampled sliding-window mean — the blue "average" overlay. Mirrors the web frontend's
+ * `movingAverage` in `lib/measurements.ts`.
+ *
+ * Unlike [bucketAverage] (one mean per fixed 15-min slot, which collapses to a single point
+ * when a burst of activity is short), this walks the whole span at a fixed [stepMs] cadence
+ * and, at each step, averages *every* raw sample within `±windowMs/2` via a two-pointer sweep
+ * (O(n + span/step)). Steps whose window caught no sample are skipped, so a real gap still
+ * breaks the line once it goes back through [splitByGap].
+ */
+fun movingAverage(points: List<Pair<Instant, Float>>, windowMs: Long, stepMs: Long): List<ChartPoint> {
+    if (points.isEmpty()) return emptyList()
+    val samples = points.map { it.first.toEpochMilli() to it.second }.sortedBy { it.first }
+    val half = windowMs / 2
+    val firstT = samples.first().first
+    val lastT = samples.last().first
+
+    val out = mutableListOf<ChartPoint>()
+    var lo = 0
+    var hi = 0
+    var sum = 0.0
+    var t = firstT
+    while (t <= lastT + stepMs) {
+        while (hi < samples.size && samples[hi].first <= t + half) {
+            sum += samples[hi].second
+            hi++
+        }
+        while (lo < hi && samples[lo].first < t - half) {
+            sum -= samples[lo].second
+            lo++
+        }
+        val count = hi - lo
+        if (count > 0) out.add(ChartPoint(Instant.ofEpochMilli(t), (sum / count).toFloat()))
+        t += stepMs
+    }
+    return out
+}
+
+/**
  * Splits an ascending series into contiguous runs, starting a new run whenever the gap to the
  * previous point exceeds [gapMs]. Mirrors the web frontend's `splitByGap` — used to draw chart
  * lines with real holes instead of bridging silently across periods with no measurements.
@@ -60,9 +98,10 @@ fun dailyTotals(points: List<Pair<Instant, Float>>): List<Float> {
 }
 
 /**
- * step_count is a running total that resets to 0 at local midnight (see [dailyTotals]), so
- * "steps taken this hour" is the *increase* of that counter within the hour, not the counter
- * itself. Returns exactly 24 hourly buckets ending at the hour containing [nowMs], oldest
+ * step_count is the bracelet's own running total for the day — the firmware resets it to 0 at
+ * local midnight and nothing here re-derives it. This helper only *reads* that counter to show
+ * "steps taken this hour" = its increase within the hour (a display-only breakdown, it never
+ * changes a total). Returns exactly 24 hourly buckets ending at the hour containing [nowMs], oldest
  * first — hours with no measurement (or no walking) come back as 0 rather than being omitted,
  * so the bar chart always renders a full 24 bars. Mirrors the web frontend's `hourlyStepDeltas`.
  */

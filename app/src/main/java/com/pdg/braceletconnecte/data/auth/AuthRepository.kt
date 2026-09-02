@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import retrofit2.HttpException
+import java.io.IOException
 
 private val Context.authDataStore by preferencesDataStore(name = "auth")
 
@@ -132,6 +133,10 @@ class AuthRepository(
     }
 
     fun errorMessage(throwable: Throwable): String {
+        // A network failure (no DNS, no route, timeout, TLS) surfaces as an IOException with a
+        // raw OkHttp message ("Unable to resolve host ...") — not something to show the user.
+        // Anything the backend actually answered keeps its parsed detail.
+        if (throwable is IOException) return OFFLINE_MESSAGE
         return (throwable as? HttpException)?.let(apiClientProvider::parseErrorDetail)
             ?: throwable.message
             ?: "Erreur inconnue"
@@ -157,6 +162,9 @@ class AuthRepository(
     }
 
     companion object {
+        /** Shown for any connectivity failure — sober, no debug detail. */
+        const val OFFLINE_MESSAGE = "Hors ligne"
+
         private val TOKEN_KEY = stringPreferencesKey("pdg.token")
         private val USER_KEY = stringPreferencesKey("pdg.user")
         private val BASE_URL_KEY = stringPreferencesKey("pdg.apiBaseUrl")

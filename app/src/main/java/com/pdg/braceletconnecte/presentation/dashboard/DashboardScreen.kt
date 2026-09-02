@@ -60,7 +60,6 @@ import com.pdg.braceletconnecte.presentation.components.headerDate
 import com.pdg.braceletconnecte.presentation.components.initials
 import com.pdg.braceletconnecte.presentation.components.timeAgo
 import com.pdg.braceletconnecte.presentation.navigation.AppRoutes
-import com.pdg.braceletconnecte.presentation.stats.hourlyStepDeltas
 
 @Composable
 fun DashboardScreen(
@@ -91,12 +90,9 @@ fun DashboardScreen(
         ?: "Aucun bracelet"
     val braceletActive = (live != null || last?.bracelet != null) && uiState.connectionState != ConnectionState.Error
 
-    // step_count only tracks "today so far" (it resets at local midnight), so a true rolling
-    // last-24h total is computed separately by summing the hourly deltas.
-    val steps24hPairs = uiState.recentMeasurements.mapNotNull { measurement ->
-        measurement.capturedAtInstant()?.let { it to measurement.stepCount.toFloat() }
-    }
-    val steps24h = hourlyStepDeltas(steps24hPairs).sumOf { it.value.toDouble() }
+    // The bracelet is the only step counter: it sends the day's running total (reset to 0 at
+    // local midnight on the firmware side). We just show that value — nothing is re-derived here.
+    val stepsToday = (live?.stepCount ?: last?.stepCount)?.toDouble()
 
     AppScaffold(navController = navController) { padding ->
         Column(
@@ -166,8 +162,8 @@ fun DashboardScreen(
                 )
                 MetricTile(
                     icon = "👣",
-                    name = "Pas (24h)",
-                    value = formatNumber(steps24h),
+                    name = "Pas aujourd'hui",
+                    value = formatNumber(stepsToday),
                     isLive = true,
                     modifier = Modifier.weight(1f),
                 )
